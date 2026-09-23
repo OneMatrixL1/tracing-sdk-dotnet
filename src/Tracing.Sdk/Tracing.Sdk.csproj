@@ -11,11 +11,19 @@
 
     <PackageId>VMatrix.Tracing.Sdk</PackageId>
     <Version>1.0.0</Version>
-    <Authors>1Matrix</Authors>
+    <Authors>vmatrix</Authors>
     <Description>Tracing SDK: canonicalize (RFC 8785 JSON Canonicalization Scheme, or W3C Exclusive C14N for XML) and hash (Keccak-256) data-integrity records, then send them to an Indexer service over HTTP.</Description>
     <PackageTags>tracing;data-integrity;keccak256;jcs;rfc8785;c14n;xml-c14n;blockchain;anchoring</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/OneMatrixL1/tracing-sdk-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/OneMatrixL1/tracing-sdk-dotnet</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
+    <!-- Source Link (bundled with the .NET SDK): records the commit in the
+         package and lets debuggers fetch the exact sources from GitHub. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
 
     <!-- Reproducible package: same sources, same bytes. -->
     <Deterministic>true</Deterministic>
