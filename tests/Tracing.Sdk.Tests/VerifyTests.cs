@@ -133,6 +133,38 @@ public class VerifyTests
         await Assert.ThrowsAsync<ConfigException>(() => _sdk.VerifyAsync(dataHash, proof, mode));
 
     [Fact]
+    public async Task AcceptsTheHashAndProofAsBytes()
+    {
+        _rpc.Receipt = Receipt(new { topics = new[] { Topic(), DataHash }, data = "0x" + Word(1) });
+
+        Assert.True(await _sdk.VerifyAsync(Convert.FromHexString(DataHash[2..]), Convert.FromHexString(TxHash[2..])));
+        Assert.Equal([("https://rpc.example.com", TxHash, (int?)null)], _rpc.Calls);
+    }
+
+    [Fact]
+    public async Task VerifiesWhatQueryByHashReturns()
+    {
+        var transport = new FakeTransport
+        {
+            QueryResponse = FakeTransport.Answer(200, $$"""{"hash":"{{DataHash}}","proof":["{{TxHash}}"],"proofType":"transactionHash"}"""),
+        };
+        _sdk.SetTransportForTesting(transport);
+        _rpc.Receipt = Receipt(new { topics = new[] { Topic(), DataHash }, data = "0x" + Word(1) });
+
+        var anchor = await _sdk.QueryByHashAsync(DataHash);
+
+        Assert.True(await _sdk.VerifyAsync(anchor.Hash, anchor.Proof[0], anchor.ProofType));
+    }
+
+    [Theory]
+    [InlineData(0, 32)]
+    [InlineData(31, 32)]
+    [InlineData(32, 0)]
+    [InlineData(32, 31)]
+    public async Task RejectsBytesThatAreNot32Long(int hashLength, int proofLength) =>
+        await Assert.ThrowsAsync<ConfigException>(() => _sdk.VerifyAsync(new byte[hashLength], new byte[proofLength]));
+
+    [Fact]
     public async Task ThrowsWhenTheNodeDoesNotKnowTheTransaction()
     {
         _rpc.Receipt = null;
@@ -150,7 +182,7 @@ public class VerifyTests
 
     [Fact]
     public void TopicIsTheKeccakOfTheEventSignature() =>
-        Assert.Equal(new Keccak256Hasher().Hash("Anchored(bytes32,uint64)"u8.ToArray()), Topic());
+        Assert.Equal(Keccak256Hasher.ToHex(new Keccak256Hasher().Hash("Anchored(bytes32,uint64)"u8.ToArray())), Topic());
 
     [Fact]
     public void DecodesSigningTimeAsAnExactUint64()

@@ -23,7 +23,7 @@ public class CanonicalizerTests
     [Theory]
     [MemberData(nameof(KeccakCases))]
     public void KeccakFixture(FixtureCase fixture) =>
-        Assert.Equal(fixture.ExpectedHash, new Keccak256Hasher().Hash(Encoding.UTF8.GetBytes(fixture.Inputs[0])));
+        Assert.Equal(fixture.ExpectedHash, Keccak256Hasher.ToHex(new Keccak256Hasher().Hash(Encoding.UTF8.GetBytes(fixture.Inputs[0]))));
 
     [Fact]
     public void JsonRejectsInvalidUtf8Bytes() =>

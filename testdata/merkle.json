@@ -1,0 +1,198 @@
+{
+    "description": "Merkle inclusion proofs for verify() mode \"merkleProof\". Every SDK must fold `leaf` through `proof` and get `root` exactly when `valid` is true. Roots were computed by merkletreejs 0.5 with { sortPairs: true }, an implementation independent of the SDKs.",
+    "format": {
+        "hash": "Keccak-256 (the original Keccak, not FIPS-202 SHA3-256)",
+        "leaf": "the record hash itself, as returned by hash() — not hashed again",
+        "pair": "parent = keccak256(a || b) with the two 32-byte nodes in ascending byte order (OpenZeppelin MerkleProof.verify), so proofs carry no left/right flags",
+        "proof": "sibling hashes ordered from the leaf up to the root; in a query result they follow the transaction hash, i.e. proof = [txHash, ...siblings]",
+        "oddNodes": "a node without a pair is promoted to the next level unchanged",
+        "leaves": "record i is keccak256(\"record-i\") (UTF-8), for i from 0"
+    },
+    "cases": [
+        {
+            "id": "single-leaf-tree",
+            "description": "A one-leaf tree: the proof is empty and the root is the leaf itself",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [],
+            "root": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "valid": true
+        },
+        {
+            "id": "two-leaf-tree-left",
+            "description": "Two leaves: the proof is the other leaf",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42"
+            ],
+            "root": "0x646c4923ce1d16cbb58f29b46f9bf9e910289196b70fe83a131a1bd0e2996ed0",
+            "valid": true
+        },
+        {
+            "id": "two-leaf-tree-right",
+            "description": "Two leaves, verified from the other side: pair hashing sorts the two nodes, so the result is the same root",
+            "leaf": "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+            "proof": [
+                "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a"
+            ],
+            "root": "0x646c4923ce1d16cbb58f29b46f9bf9e910289196b70fe83a131a1bd0e2996ed0",
+            "valid": true
+        },
+        {
+            "id": "five-leaf-tree-leaf-0",
+            "description": "Five leaves (an odd count), leaf 0",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": true
+        },
+        {
+            "id": "five-leaf-tree-leaf-1",
+            "description": "Five leaves (an odd count), leaf 1",
+            "leaf": "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+            "proof": [
+                "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": true
+        },
+        {
+            "id": "five-leaf-tree-leaf-2",
+            "description": "Five leaves (an odd count), leaf 2",
+            "leaf": "0x85fcb3c968e6e17e2b21e2af689e7de6ef7cdbf4de9b4354e3b3767da937e9d2",
+            "proof": [
+                "0x4b25f3df04de83b405ff27850e3d53635f617e44eb445311a7b2741d632ec0a0",
+                "0x646c4923ce1d16cbb58f29b46f9bf9e910289196b70fe83a131a1bd0e2996ed0",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": true
+        },
+        {
+            "id": "five-leaf-tree-leaf-3",
+            "description": "Five leaves (an odd count), leaf 3",
+            "leaf": "0x4b25f3df04de83b405ff27850e3d53635f617e44eb445311a7b2741d632ec0a0",
+            "proof": [
+                "0x85fcb3c968e6e17e2b21e2af689e7de6ef7cdbf4de9b4354e3b3767da937e9d2",
+                "0x646c4923ce1d16cbb58f29b46f9bf9e910289196b70fe83a131a1bd0e2996ed0",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": true
+        },
+        {
+            "id": "five-leaf-tree-leaf-4",
+            "description": "Five leaves, the odd one out: a lone node is promoted a level unchanged, so its proof is shorter",
+            "leaf": "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3",
+            "proof": [
+                "0x5b8971e755b8fc2a7fdd9a077ac1c26193f56f08dcc69c46413c05600db3455c"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": true
+        },
+        {
+            "id": "sixteen-leaf-tree-leaf-0",
+            "description": "A full 16-leaf tree (four levels), leaf 0",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xf9d2ff78d742baa878a97f1e7dc566a09bfeb929af7c8f3ae0b74ae9840e56df",
+                "0x0fec39338585c8f6940a1ced4f37d492562464dd4499f6594dd05e3c5816d43d"
+            ],
+            "root": "0x62ca960971c78c6ebbba40e1a1abfd122c3b0c5b671768003cf1e10f91a261bd",
+            "valid": true
+        },
+        {
+            "id": "sixteen-leaf-tree-leaf-7",
+            "description": "A full 16-leaf tree (four levels), leaf 7",
+            "leaf": "0x08b7ec9b625831fbf29da9f2bb95c2ff69669396031452798533c0317df215de",
+            "proof": [
+                "0xd529d7804e2e87fb6e7f27131386ca5b1fbd10242ea83d557ca90b987d80f7e4",
+                "0x365787ad03e92009ade8ee021c5c24755d422028e093660b710455681b75748c",
+                "0x5b8971e755b8fc2a7fdd9a077ac1c26193f56f08dcc69c46413c05600db3455c",
+                "0x0fec39338585c8f6940a1ced4f37d492562464dd4499f6594dd05e3c5816d43d"
+            ],
+            "root": "0x62ca960971c78c6ebbba40e1a1abfd122c3b0c5b671768003cf1e10f91a261bd",
+            "valid": true
+        },
+        {
+            "id": "sixteen-leaf-tree-leaf-15",
+            "description": "A full 16-leaf tree (four levels), leaf 15",
+            "leaf": "0xd91872fe8b62841c6431eb837c4854d7b20057a5ceef6e08bec83f570a5967c8",
+            "proof": [
+                "0x5f17d960d77c2009cc3ca7a72cc364d9f52957001c1ff445198eeaacc80b9087",
+                "0xc11dbe36498cdb59154a25ab42f51337213ffa580bafb07a6ce80166d78890eb",
+                "0x60f72b4f7c2b289a34d4ec91da0ee2fb9008a7c6871431134353bee9e70f8e92",
+                "0x543a72b0ea6598e76014bdf93bea55cbedf5557cb60c42013bae07d12eb5b96c"
+            ],
+            "root": "0x62ca960971c78c6ebbba40e1a1abfd122c3b0c5b671768003cf1e10f91a261bd",
+            "valid": true
+        },
+        {
+            "id": "tampered-sibling",
+            "description": "One sibling changed: the computed root no longer matches",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x0000000000000000000000000000000000000000000000000000000000000000",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": false
+        },
+        {
+            "id": "siblings-out-of-order",
+            "description": "Sorted pairs drop left/right, but siblings must still run from the leaf up to the root",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": false
+        },
+        {
+            "id": "wrong-leaf",
+            "description": "Another record's hash with leaf 0's proof",
+            "leaf": "0x85fcb3c968e6e17e2b21e2af689e7de6ef7cdbf4de9b4354e3b3767da937e9d2",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": false
+        },
+        {
+            "id": "truncated-proof",
+            "description": "The last sibling missing: the path stops below the root",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": false
+        },
+        {
+            "id": "extra-sibling",
+            "description": "An extra sibling: the path runs past the root",
+            "leaf": "0x3881eebe5f1c84aa48492b24260d0a0a6ba5f50d537d2c8f2e299826f5fa3e3a",
+            "proof": [
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42",
+                "0x67c9fd740c2cbb4a838352aa667655132ea1cf5881a0e2b792922e7af6d9f7de",
+                "0xe1ad9e53bfb0b72faba3974dd3325377aa0c17702f94b75be2ca804543b193f3",
+                "0xebbc58031e59bd2ba938bc1dba416880e213b0a0425639770c15bcd997024f42"
+            ],
+            "root": "0x31dd65683d3dd787f5ddcaa646ab9cc0cccf7f9fe95ab691d4fe3d2a65eb3554",
+            "valid": false
+        }
+    ]
+}

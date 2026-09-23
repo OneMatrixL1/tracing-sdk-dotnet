@@ -27,7 +27,7 @@ public sealed class AnchoredEventDecoder(Keccak256Hasher hasher)
     /// keccak256 of the event signature — the topics[0] every anchor log
     /// carries, lowercase and 0x-prefixed.
     /// </summary>
-    public string Topic() => _topic ??= hasher.Hash(Encoding.UTF8.GetBytes(EventSignature)).ToLowerInvariant();
+    public string Topic() => _topic ??= Keccak256Hasher.ToHex(hasher.Hash(Encoding.UTF8.GetBytes(EventSignature)));
 
     /// <summary>
     /// Decode one receipt log as Anchored(bytes32,uint64).

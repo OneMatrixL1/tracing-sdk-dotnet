@@ -82,12 +82,12 @@ public sealed class BatchRecord
 public sealed record IndexerResponse(int StatusCode, string Body, JsonElement? Json, int RecordCount);
 
 /// <summary>The result of sending one record.</summary>
-/// <param name="Hash">the record's 0x-prefixed Keccak-256 hash</param>
+/// <param name="Hash">the record's 32-byte Keccak-256 digest; <see cref="Hash.Keccak256Hasher.ToHex"/> gives its 0x-hex form</param>
 /// <param name="Response">the Indexer's answer; shared by every record of a batch</param>
-public sealed record SendResult(string Hash, IndexerResponse Response);
+public sealed record SendResult(byte[] Hash, IndexerResponse Response);
 
 /// <summary>An anchor looked up by hash.</summary>
 /// <param name="Hash">the record hash, as echoed back by the Indexer</param>
-/// <param name="Proof">every on-chain proof the record was anchored by</param>
+/// <param name="Proof">every on-chain proof the record was anchored by; with ProofType "transactionHash", the 32-byte transaction hashes</param>
 /// <param name="ProofType">how each proof is resolved on chain; pass it to Verify as its mode</param>
-public sealed record QueryResult(string Hash, IReadOnlyList<string> Proof, string ProofType);
+public sealed record QueryResult(byte[] Hash, IReadOnlyList<byte[]> Proof, string ProofType);

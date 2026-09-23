@@ -16,11 +16,19 @@ namespace Tracing.Sdk;
 public sealed class TracingSdk : IDisposable
 {
     /// <summary>
-    /// Verify mode for proofs that are transaction hashes — the only proof
-    /// kind today. The mode parameter exists so other proof kinds can be added
-    /// without changing Verify's signature.
+    /// Verify mode for proofs that are transaction hashes: each proof is a
+    /// transaction whose Anchored event carries the record hash itself.
     /// </summary>
     public const string ModeTransactionHash = "transactionHash";
+
+    /// <summary>
+    /// Verify mode for Merkle proofs: the proof is one array whose first
+    /// element is the transaction hash and whose remaining elements are the
+    /// record's sibling hashes, leaf to root. The transaction's Anchored event
+    /// carries the Merkle root (see <see cref="MerkleProof"/> for the tree
+    /// layout).
+    /// </summary>
+    public const string ModeMerkleProof = "merkleProof";
 
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
@@ -76,10 +84,11 @@ public sealed class TracingSdk : IDisposable
             throw new ConfigException("signingTime is required");
         }
 
-        var entry = new AnchorEntry(Hash(rawData, options), signingTime);
+        var hash = Hash(rawData, options);
+        var entry = new AnchorEntry(Keccak256Hasher.ToHex(hash), signingTime);
         var response = await _transport.SendSingleAsync(entry, options?.TimeoutMs, cancellationToken).ConfigureAwait(false);
 
-        return new SendResult(entry.Hash, response);
+        return new SendResult(hash, response);
     }
 
     /// <summary>
@@ -98,7 +107,7 @@ public sealed class TracingSdk : IDisposable
     {
         ArgumentNullException.ThrowIfNull(records);
 
-        var entries = records
+        var hashes = records
             .Select(record =>
             {
                 if (record?.RawData is null || record.SigningTime is null)
@@ -106,23 +115,24 @@ public sealed class TracingSdk : IDisposable
                     throw new ConfigException("Each record requires \"rawData\" and \"signingTime\"");
                 }
 
-                return new AnchorEntry(Hash(record.RawData, options), record.SigningTime);
+                return (Hash: Hash(record.RawData, options), record.SigningTime);
             })
             .ToList();
 
+        var entries = hashes.Select(h => new AnchorEntry(Keccak256Hasher.ToHex(h.Hash), h.SigningTime)).ToList();
         var response = await _transport.SendBatchAsync(entries, options?.TimeoutMs, cancellationToken).ConfigureAwait(false);
 
-        return entries.Select(entry => new SendResult(entry.Hash, response)).ToList();
+        return hashes.Select(h => new SendResult(h.Hash, response)).ToList();
     }
 
     /// <summary>Canonicalize and hash a record without sending it.</summary>
-    /// <returns>0x-prefixed Keccak-256 hex</returns>
+    /// <returns>the 32-byte Keccak-256 digest; <see cref="Keccak256Hasher.ToHex"/> gives its 0x-hex form</returns>
     /// <exception cref="ConfigException">no dataType is given here or in config</exception>
     /// <exception cref="CanonicalizationException">rawData cannot be canonicalized</exception>
-    public string Hash(string rawData, SendOptions? options = null) => Hash(EncodeRawData(rawData), options);
+    public byte[] Hash(string rawData, SendOptions? options = null) => Hash(EncodeRawData(rawData), options);
 
     /// <inheritdoc cref="Hash(string, SendOptions?)"/>
-    public string Hash(byte[] rawData, SendOptions? options = null)
+    public byte[] Hash(byte[] rawData, SendOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(rawData);
 
@@ -132,11 +142,17 @@ public sealed class TracingSdk : IDisposable
         return _hasher.Hash(_canonicalizers[dataType].Canonicalize(rawData));
     }
 
+    /// <summary>Look up an anchored record by its hash, as returned by Hash/Send.</summary>
+    /// <inheritdoc cref="QueryByHashAsync(string, SendOptions?, CancellationToken)"/>
+    public Task<QueryResult> QueryByHashAsync(byte[] hash, SendOptions? options = null, CancellationToken cancellationToken = default) =>
+        QueryByHashAsync(ToHexOrEmpty(hash), options, cancellationToken);
+
     /// <summary>Look up an anchored record by its hash via GET /api/anchors?hash=...</summary>
     /// <returns>the hash, every proof, and the proofType to pass to Verify as its mode</returns>
     /// <exception cref="ConfigException">hash is empty</exception>
     /// <exception cref="TransportException">the request failed, the Indexer answered non-2xx
-    /// (including 404 for a hash never anchored), or the body is not the expected { hash, proof }</exception>
+    /// (including 404 for a hash never anchored), or the body is not the expected { hash, proof }
+    /// with hex values</exception>
     public async Task<QueryResult> QueryByHashAsync(string hash, SendOptions? options = null, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(hash))
@@ -164,8 +180,63 @@ public sealed class TracingSdk : IDisposable
             ? AsString(proofTypeElement)
             : ModeTransactionHash;
 
-        return new QueryResult(AsString(hashElement), proofElement.EnumerateArray().Select(AsString).ToList(), proofType);
+        return new QueryResult(
+            HexToBytes(hashElement, "hash"),
+            proofElement.EnumerateArray().Select(p => HexToBytes(p, "proof")).ToList(),
+            proofType);
     }
+
+    /// <summary>
+    /// Verify a record against the chain with a query result's whole proof
+    /// field, whatever its mode — pass QueryByHash's Hash, Proof, and ProofType.
+    /// </summary>
+    /// <remarks>
+    /// <para>With <see cref="ModeMerkleProof"/>, <paramref name="proof"/> is
+    /// [transaction hash, sibling hashes…]: the siblings fold the record hash
+    /// into a Merkle root (<see cref="MerkleProof.ComputeRoot"/>), and the
+    /// transaction must carry an Anchored event with that root.</para>
+    /// <para>With <see cref="ModeTransactionHash"/>, <paramref name="proof"/>
+    /// lists transactions, checked in order until one carries an Anchored event
+    /// with the record hash itself.</para>
+    /// </remarks>
+    /// <param name="dataHash">the record hash, as returned by Hash/Send or QueryByHash</param>
+    /// <param name="proof">QueryByHash's Proof</param>
+    /// <param name="mode">QueryByHash's ProofType</param>
+    /// <param name="options">per-call rpcUrl / timeoutMs; an rpcUrl must be given here or in config</param>
+    /// <param name="cancellationToken">cancels the request</param>
+    /// <returns>true when the chain confirms the record was anchored</returns>
+    /// <exception cref="ConfigException">dataHash or a proof element is not 32 bytes, the proof is
+    /// empty, the mode is unsupported, or no rpcUrl is configured</exception>
+    /// <exception cref="TransportException">an RPC call failed or the node does not know a transaction</exception>
+    public Task<bool> VerifyAsync(
+        byte[] dataHash,
+        IReadOnlyList<byte[]> proof,
+        string mode,
+        SendOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(ToHexOrEmpty(dataHash), proof?.Select(ToHexOrEmpty).ToList(), mode, options, cancellationToken);
+
+    /// <inheritdoc cref="VerifyAsync(byte[], IReadOnlyList{byte[]}, string, SendOptions?, CancellationToken)"/>
+    public Task<bool> VerifyAsync(
+        string dataHash,
+        IReadOnlyList<string> proof,
+        string mode,
+        SendOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(dataHash, proof, mode, options, cancellationToken);
+
+    /// <summary>
+    /// Verify a record hash against the chain, with the hash and one proof
+    /// element as bytes — as Hash/Send and QueryByHash return them.
+    /// </summary>
+    /// <inheritdoc cref="VerifyAsync(string, string, string, SendOptions?, CancellationToken)"/>
+    public Task<bool> VerifyAsync(
+        byte[] dataHash,
+        byte[] proof,
+        string mode = ModeTransactionHash,
+        SendOptions? options = null,
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(ToHexOrEmpty(dataHash), [ToHexOrEmpty(proof)], mode, options, cancellationToken);
 
     /// <summary>
     /// Check a query result against the chain itself: fetch the proof's
@@ -177,7 +248,9 @@ public sealed class TracingSdk : IDisposable
     /// A log matches when its topics[0] equals keccak256 of the event
     /// signature and its decoded bytes32 argument equals dataHash. The bytes32
     /// is read from topics[1] when the argument is indexed and from the log
-    /// data otherwise, so both layouts verify.
+    /// data otherwise, so both layouts verify. With <see cref="ModeMerkleProof"/>,
+    /// a single proof element is a transaction anchoring a one-leaf tree, whose
+    /// root is the data hash itself; use the list overloads for longer proofs.
     /// </remarks>
     /// <param name="dataHash">the record hash, as returned by Hash/Send</param>
     /// <param name="proof">with <see cref="ModeTransactionHash"/>, one of the proofs from QueryByHash</param>
@@ -187,23 +260,63 @@ public sealed class TracingSdk : IDisposable
     /// <returns>true when the transaction anchored this data hash</returns>
     /// <exception cref="ConfigException">dataHash or proof is empty or malformed, the mode is unsupported, or no rpcUrl is configured</exception>
     /// <exception cref="TransportException">the RPC call failed or the node does not know the transaction</exception>
-    public async Task<bool> VerifyAsync(
+    public Task<bool> VerifyAsync(
         string dataHash,
         string proof,
         string mode = ModeTransactionHash,
         SendOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        VerifyCoreAsync(dataHash, [proof], mode, options, cancellationToken);
+
+    private async Task<bool> VerifyCoreAsync(
+        string dataHash,
+        IReadOnlyList<string>? proof,
+        string mode,
+        SendOptions? options,
+        CancellationToken cancellationToken)
     {
-        if (mode != ModeTransactionHash)
+        if (mode is not (ModeTransactionHash or ModeMerkleProof))
         {
-            throw new ConfigException($"Unsupported verify mode \"{mode}\", expected \"{ModeTransactionHash}\"");
+            throw new ConfigException($"Unsupported verify mode \"{mode}\", expected \"{ModeTransactionHash}\" or \"{ModeMerkleProof}\"");
         }
 
         var normalizedDataHash = AnchoredEventDecoder.NormalizeHash(dataHash, "dataHash");
-        var txHash = AnchoredEventDecoder.NormalizeHash(proof, "proof");
+
+        if (proof is null || proof.Count == 0)
+        {
+            throw new ConfigException("proof is required");
+        }
+
+        var elements = proof.Select((p, i) => AnchoredEventDecoder.NormalizeHash(p, proof.Count == 1 ? "proof" : $"proof[{i}]")).ToList();
         var rpcUrl = options?.RpcUrl ?? _defaultOptions.RpcUrl
             ?? throw new ConfigException("rpcUrl is required to verify, either in the config \"options\" or per call");
 
+        if (mode == ModeMerkleProof)
+        {
+            // proof = [transaction hash, sibling hashes leaf-to-root]; the
+            // transaction anchors the root the siblings fold the leaf into.
+            var root = MerkleProof.ComputeRoot(
+                Convert.FromHexString(normalizedDataHash[2..]),
+                elements.Skip(1).Select(sibling => Convert.FromHexString(sibling[2..])));
+
+            return await AnchorsAsync(rpcUrl, elements[0], Keccak256Hasher.ToHex(root), options, cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var txHash in elements)
+        {
+            if (await AnchorsAsync(rpcUrl, txHash, normalizedDataHash, options, cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether the transaction's receipt holds an Anchored event carrying anchoredHash.</summary>
+    /// <exception cref="TransportException">the RPC call failed or the node does not know the transaction</exception>
+    private async Task<bool> AnchorsAsync(string rpcUrl, string txHash, string anchoredHash, SendOptions? options, CancellationToken cancellationToken)
+    {
         var receipt = await _rpcTransport.GetTransactionReceiptAsync(rpcUrl, txHash, options?.TimeoutMs, cancellationToken).ConfigureAwait(false)
             ?? throw new TransportException($"Transaction {txHash} was not found on the RPC endpoint");
 
@@ -212,7 +325,7 @@ public sealed class TracingSdk : IDisposable
             return false;
         }
 
-        return logs.EnumerateArray().Any(log => _eventDecoder.Decode(log)?.DataHash == normalizedDataHash);
+        return logs.EnumerateArray().Any(log => _eventDecoder.Decode(log)?.DataHash == anchoredHash);
     }
 
     public void Dispose()
@@ -282,4 +395,29 @@ public sealed class TracingSdk : IDisposable
 
     private static string AsString(JsonElement element) =>
         element.ValueKind == JsonValueKind.String ? element.GetString()! : element.GetRawText();
+
+    /// <summary>A digest as hex, or "" for a missing one so the string overloads report it.</summary>
+    private static string ToHexOrEmpty(byte[]? bytes) => bytes is null || bytes.Length == 0 ? "" : Keccak256Hasher.ToHex(bytes);
+
+    /// <summary>Decode a hex value from the Indexer's answer, 0x-prefixed or bare.</summary>
+    /// <exception cref="TransportException">the value is not a non-empty hex string</exception>
+    private static byte[] HexToBytes(JsonElement element, string field)
+    {
+        var text = element.ValueKind == JsonValueKind.String ? element.GetString()!.Trim() : "";
+        var digits = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
+
+        try
+        {
+            if (digits.Length > 0)
+            {
+                return Convert.FromHexString(digits);
+            }
+        }
+        catch (FormatException)
+        {
+            // Odd length or a non-hex character; reported below.
+        }
+
+        throw new TransportException($"Unexpected {field} in query by hash response, expected a hex string, got {element.GetRawText()}");
+    }
 }

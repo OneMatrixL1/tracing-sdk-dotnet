@@ -21,7 +21,7 @@ public class TracingSdkTests
         return (sdk, transport);
     }
 
-    private static string Keccak(string input) => new Keccak256Hasher().Hash(Encoding.UTF8.GetBytes(input));
+    private static byte[] Keccak(string input) => new Keccak256Hasher().Hash(Encoding.UTF8.GetBytes(input));
 
     [Fact]
     public async Task SendReturnsTheHashAndTheResponse()
@@ -30,7 +30,7 @@ public class TracingSdkTests
 
         var result = await sdk.SendAsync("{\"secret\":\"do-not-leak\"}", 1234);
 
-        Assert.Matches("^0x[0-9a-f]{64}$", result.Hash);
+        Assert.Equal(32, result.Hash.Length);
         Assert.Equal(new IndexerResponse(200, "", null, 1), result.Response);
     }
 
@@ -42,7 +42,7 @@ public class TracingSdkTests
         var result = await sdk.SendAsync("{\"a\":1}", 1000);
 
         var entry = Assert.Single(transport.SingleCalls);
-        Assert.Equal(result.Hash, entry.Hash);
+        Assert.Equal(Keccak256Hasher.ToHex(result.Hash), entry.Hash);
         Assert.Equal(1000, entry.SigningTime);
         Assert.Empty(transport.BatchCalls);
     }
@@ -106,7 +106,7 @@ public class TracingSdkTests
         var results = await sdk.SendBatchAsync([new BatchRecord("{\"a\":1}", 1), new BatchRecord("{\"a\":2}", 2)]);
 
         var batch = Assert.Single(transport.BatchCalls);
-        Assert.Equal([results[0].Hash, results[1].Hash], batch.Select(e => e.Hash));
+        Assert.Equal([Keccak256Hasher.ToHex(results[0].Hash), Keccak256Hasher.ToHex(results[1].Hash)], batch.Select(e => e.Hash));
         Assert.Equal([1, 2], batch.Select(e => (int)e.SigningTime));
         Assert.Empty(transport.SingleCalls);
     }
@@ -231,7 +231,7 @@ public class TracingSdkTests
             Auth = AuthConfig.ApiToken("test-token"),
         }));
 
-        Assert.StartsWith("0x", (await sdk.SendAsync("{\"a\":1}", 1, SendOptions.ForDataType(DataType.Json))).Hash);
+        Assert.Equal(32, (await sdk.SendAsync("{\"a\":1}", 1, SendOptions.ForDataType(DataType.Json))).Hash.Length);
     }
 
     [Fact]
@@ -278,10 +278,22 @@ public class TracingSdkTests
 
         var result = await sdk.QueryByHashAsync("0xdeadbeef");
 
-        Assert.Equal("0xdeadbeef", result.Hash);
-        Assert.Equal(["0xabc", "0xdef"], result.Proof);
+        Assert.Equal([0xDE, 0xAD, 0xBE, 0xEF], result.Hash);
+        Assert.Equal([Convert.FromHexString(FakeTransport.ProofA[2..]), Convert.FromHexString(FakeTransport.ProofB[2..])], result.Proof);
         Assert.Equal("transactionHash", result.ProofType);
         Assert.Equal(["0xdeadbeef"], transport.QueryCalls);
+    }
+
+    [Fact]
+    public async Task QueryByHashAcceptsUppercaseAndUnprefixedHex()
+    {
+        var (sdk, transport) = WithFakeTransport();
+        transport.QueryResponse = FakeTransport.Answer(200, """{"hash":"DEADBEEF","proof":["0XABCD"]}""");
+
+        var result = await sdk.QueryByHashAsync("0xdeadbeef");
+
+        Assert.Equal([0xDE, 0xAD, 0xBE, 0xEF], result.Hash);
+        Assert.Equal([0xAB, 0xCD], Assert.Single(result.Proof));
     }
 
     [Fact]
@@ -297,13 +309,18 @@ public class TracingSdkTests
     public async Task QueryByHashDefaultsProofTypeToTransactionHash()
     {
         var (sdk, transport) = WithFakeTransport();
-        transport.QueryResponse = FakeTransport.Answer(200, """{"hash":"0xdeadbeef","proof":["0xabc"]}""");
+        transport.QueryResponse = FakeTransport.Answer(200, """{"hash":"0xdeadbeef","proof":["0xabcd"]}""");
 
         Assert.Equal(TracingSdk.ModeTransactionHash, (await sdk.QueryByHashAsync("0xdeadbeef")).ProofType);
     }
 
     [Theory]
-    [InlineData(200, """{"hash":"0xdeadbeef","proof":"0xabc"}""")]
+    [InlineData(200, """{"hash":"0xdeadbeef","proof":"0xabcd"}""")]
+    [InlineData(200, """{"hash":"0xdeadbeef","proof":["0xabc"]}""")]
+    [InlineData(200, """{"hash":"0xdeadbeef","proof":["0xzz"]}""")]
+    [InlineData(200, """{"hash":"0xdeadbeef","proof":[""]}""")]
+    [InlineData(200, """{"hash":"0xdeadbeef","proof":[42]}""")]
+    [InlineData(200, """{"hash":"not-hex","proof":[]}""")]
     [InlineData(200, "not-json-object")]
     [InlineData(200, "[]")]
     [InlineData(404, "null")]
@@ -316,11 +333,23 @@ public class TracingSdkTests
     }
 
     [Fact]
+    public async Task QueryByHashAcceptsTheDigestHashReturns()
+    {
+        var (sdk, transport) = WithFakeTransport();
+        var hash = sdk.Hash("{\"a\":1}");
+
+        await sdk.QueryByHashAsync(hash);
+
+        Assert.Equal([Keccak256Hasher.ToHex(hash)], transport.QueryCalls);
+    }
+
+    [Fact]
     public async Task QueryByHashRejectsAnEmptyHash()
     {
         var (sdk, _) = WithFakeTransport();
 
         await Assert.ThrowsAsync<ConfigException>(() => sdk.QueryByHashAsync(""));
+        await Assert.ThrowsAsync<ConfigException>(() => sdk.QueryByHashAsync(Array.Empty<byte>()));
     }
 
     [Fact]

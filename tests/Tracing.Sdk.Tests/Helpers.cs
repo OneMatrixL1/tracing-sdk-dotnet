@@ -41,6 +41,15 @@ public sealed class FixtureCase(JsonElement element)
 
     public string? ForbiddenSubstring => String("forbiddenSubstring");
 
+    // merkle.json cases.
+    public string Leaf => String("leaf")!;
+
+    public IReadOnlyList<string> Proof => element.GetProperty("proof").EnumerateArray().Select(p => p.GetString()!).ToList();
+
+    public string Root => String("root")!;
+
+    public bool Valid => Flag("valid");
+
     public override string ToString() => Id;
 
     private bool Flag(string name) => element.TryGetProperty(name, out var value) && value.GetBoolean();
@@ -50,6 +59,11 @@ public sealed class FixtureCase(JsonElement element)
 
 internal sealed class FakeTransport : IIndexerTransport
 {
+    /// <summary>The two transaction-hash proofs a query answers with by default.</summary>
+    public static readonly string ProofA = "0x" + string.Concat(Enumerable.Repeat("ab", 32));
+
+    public static readonly string ProofB = "0x" + string.Concat(Enumerable.Repeat("cd", 32));
+
     public List<AnchorEntry> SingleCalls { get; } = [];
 
     public List<IReadOnlyList<AnchorEntry>> BatchCalls { get; } = [];
@@ -87,7 +101,7 @@ internal sealed class FakeTransport : IIndexerTransport
         QueryCalls.Add(hash);
         TimeoutCalls.Add(timeoutMs);
 
-        return Task.FromResult(QueryResponse ?? Answer(200, $$"""{"hash":"{{hash}}","proof":["0xabc","0xdef"],"proofType":"transactionHash"}"""));
+        return Task.FromResult(QueryResponse ?? Answer(200, $$"""{"hash":"{{hash}}","proof":["{{ProofA}}","{{ProofB}}"],"proofType":"transactionHash"}"""));
     }
 
     public void Dispose()
