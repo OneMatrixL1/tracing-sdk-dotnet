@@ -1,0 +1,6 @@
+# Third-party code, kept as published: treat it as generated so its style
+# and nullability warnings don't drown out the SDK's own.
+[*.cs]
+generated_code = true
+dotnet_diagnostic.CS1587.severity = none
+dotnet_diagnostic.CS8603.severity = none

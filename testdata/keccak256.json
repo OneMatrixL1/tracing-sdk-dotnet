@@ -1,0 +1,33 @@
+{
+    "description": "Keccak-256 (the original Keccak submission — NOT FIPS-202/SHA3-256) applied to a UTF-8 encoded input string. Every language SDK's hasher must reproduce expectedHash (lowercase hex, 0x-prefixed, 64 hex digits) for each case.",
+    "algorithm": "keccak256",
+    "encoding": "utf-8",
+    "outputFormat": "0x-prefixed lowercase hex, 64 hex digits (32 bytes)",
+    "cases": [
+        {
+            "id": "empty-string",
+            "input": "",
+            "expectedHash": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+        },
+        {
+            "id": "abc",
+            "input": "abc",
+            "expectedHash": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+        },
+        {
+            "id": "hello-world",
+            "input": "hello world",
+            "expectedHash": "0x47173285a8d7341e5e972fc677286384f802f8ef42a5ec5f03bbfa254cb01fad"
+        },
+        {
+            "id": "quick-brown-fox",
+            "input": "The quick brown fox jumps over the lazy dog",
+            "expectedHash": "0x4d741b6f1eb29cb2a9b9911c82f56fa8d73b04959d3d9d222895df6c0b28aa15"
+        },
+        {
+            "id": "utf-8-multibyte",
+            "input": "café 日本語 😀",
+            "expectedHash": "0x4e1bf39d839ecda1c521af7082751f6a8b7bc0cc8ef0c69cbffa09d84f20c454"
+        }
+    ]
+}

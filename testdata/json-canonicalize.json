@@ -1,0 +1,348 @@
+{
+    "description": "The canonicalizer must implement RFC 8785 (JSON Canonicalization Scheme / JCS): https://www.rfc-editor.org/rfc/rfc8785. Decode the JSON, then re-serialize with object member names sorted by UTF-16 code unit value, numbers formatted per the ECMAScript `Number::toString` algorithm (so `1`, `1.0`, and `1e0` all collapse to the same output), and minimal string escaping. Every language SDK's canonicalizer must produce exactly `expectedOutput` (byte-for-byte) for every string in `input`/`inputs`.",
+    "format": {
+        "objectKeyOrder": "sorted ascending by UTF-16 code UNIT value (RFC 8785 section 3.2.3) — NOT byte order and NOT Unicode code point order; these disagree for characters outside the Basic Multilingual Plane (see the `utf16-surrogate-sorts-before-bmp` case)",
+        "arrayOrder": "preserved as-is",
+        "numberFormat": "ECMAScript Number::toString (RFC 8785 section 3.2.2.3) — shortest round-trippable decimal digits, plain/decimal/exponential form chosen by magnitude, integers and equal-valued floats collapse to the same output, -0 normalizes to 0",
+        "objectVsArray": "a JSON object and a JSON array are distinct types even when an object's keys happen to be sequential integers starting at 0 (see `object-with-sequential-numeric-keys-stays-an-object`) — do not use an array/list heuristic to decide the output shape",
+        "whitespace": "none (compact)",
+        "escaping": "forward slashes, non-ASCII characters, and U+2028/U+2029 line separators NOT escaped (equivalent to PHP's JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_LINE_TERMINATORS)",
+        "parsing": "strict RFC 8259 input, as PHP's json_decode accepts it: at most 511 levels of nesting, the last of duplicate member names wins, and a byte order mark, a lone surrogate, a number that overflows to Infinity, a leading zero, or a trailing comma is an error"
+    },
+    "cases": [
+        {
+            "id": "key-order-object",
+            "description": "Object key order does not affect output",
+            "inputs": ["{\"b\":1,\"a\":2}", "{\"a\":2,\"b\":1}"],
+            "expectedOutput": "{\"a\":2,\"b\":1}"
+        },
+        {
+            "id": "whitespace-ignored",
+            "description": "Insignificant whitespace does not affect output",
+            "inputs": ["{\"a\":1,\"b\":2}", "{\n  \"a\" : 1,\n  \"b\" : 2\n}\n"],
+            "expectedOutput": "{\"a\":1,\"b\":2}"
+        },
+        {
+            "id": "array-order-preserved-ascending",
+            "description": "Array element order is preserved (ascending case)",
+            "input": "{\"list\":[1,2,3]}",
+            "expectedOutput": "{\"list\":[1,2,3]}"
+        },
+        {
+            "id": "array-order-preserved-descending",
+            "description": "Array element order is preserved (descending case, must differ from the ascending case's output)",
+            "input": "{\"list\":[3,2,1]}",
+            "expectedOutput": "{\"list\":[3,2,1]}"
+        },
+        {
+            "id": "nested-object-keys-sorted",
+            "description": "Keys of nested objects are sorted too",
+            "inputs": ["{\"outer\":{\"z\":1,\"a\":2}}", "{\"outer\":{\"a\":2,\"z\":1}}"],
+            "expectedOutput": "{\"outer\":{\"a\":2,\"z\":1}}"
+        },
+        {
+            "id": "array-of-objects-keys-sorted",
+            "description": "Keys within each object of an array are sorted independently",
+            "inputs": [
+                "{\"list\":[{\"b\":1,\"a\":2},{\"d\":3,\"c\":4}]}",
+                "{\"list\":[{\"a\":2,\"b\":1},{\"c\":4,\"d\":3}]}"
+            ],
+            "expectedOutput": "{\"list\":[{\"a\":2,\"b\":1},{\"c\":4,\"d\":3}]}"
+        },
+        {
+            "id": "array-of-objects-order-preserved-a",
+            "description": "Order of objects within an array is preserved",
+            "input": "{\"list\":[{\"a\":1},{\"a\":2}]}",
+            "expectedOutput": "{\"list\":[{\"a\":1},{\"a\":2}]}"
+        },
+        {
+            "id": "array-of-objects-order-preserved-b",
+            "description": "Order of objects within an array is preserved (reversed case, must differ from the -a case's output)",
+            "input": "{\"list\":[{\"a\":2},{\"a\":1}]}",
+            "expectedOutput": "{\"list\":[{\"a\":2},{\"a\":1}]}"
+        },
+        {
+            "id": "empty-array-preserved",
+            "description": "Empty arrays round-trip as empty arrays",
+            "input": "{\"list\":[]}",
+            "expectedOutput": "{\"list\":[]}"
+        },
+        {
+            "id": "nested-arrays-within-objects",
+            "description": "Object keys are sorted at every nesting level while arrays anywhere in the tree keep their order",
+            "inputs": [
+                "{\"b\":[1,2],\"a\":{\"y\":1,\"x\":[3,4]}}",
+                "{\"a\":{\"x\":[3,4],\"y\":1},\"b\":[1,2]}"
+            ],
+            "expectedOutput": "{\"a\":{\"x\":[3,4],\"y\":1},\"b\":[1,2]}"
+        },
+        {
+            "id": "different-content-a",
+            "description": "Different content must produce different output (case a)",
+            "input": "{\"a\":1}",
+            "expectedOutput": "{\"a\":1}"
+        },
+        {
+            "id": "different-content-b",
+            "description": "Different content must produce different output (case b, must differ from case a's output)",
+            "input": "{\"a\":2}",
+            "expectedOutput": "{\"a\":2}"
+        },
+        {
+            "id": "object-with-sequential-numeric-keys-stays-an-object",
+            "description": "A JSON object whose keys happen to be sequential integers starting at 0 must remain an object in canonical output, not collapse into a JSON array",
+            "input": "{\"0\":\"x\",\"1\":\"y\"}",
+            "expectedOutput": "{\"0\":\"x\",\"1\":\"y\"}"
+        },
+        {
+            "id": "empty-object-preserved",
+            "description": "An empty object stays an object, distinct from an empty array",
+            "input": "{\"o\":{}}",
+            "expectedOutput": "{\"o\":{}}"
+        },
+        {
+            "id": "integer-and-equal-float-collapse-to-same-output",
+            "description": "A JSON integer literal and a JSON float literal for the same numeric value must canonicalize identically — JCS numbers are all IEEE 754 doubles, there is no separate integer type",
+            "inputs": ["{\"a\":1}", "{\"a\":1.0}", "{\"a\":1e0}"],
+            "expectedOutput": "{\"a\":1}"
+        },
+        {
+            "id": "negative-zero-normalizes-to-zero",
+            "description": "Negative zero normalizes to \"0\", matching JSON.stringify(-0) === \"0\"",
+            "input": "{\"a\":-0.0}",
+            "expectedOutput": "{\"a\":0}"
+        },
+        {
+            "id": "fraction-preserves-shortest-digits",
+            "description": "A fractional value is written with its shortest round-trippable decimal digits",
+            "input": "{\"a\":0.1}",
+            "expectedOutput": "{\"a\":0.1}"
+        },
+        {
+            "id": "large-integer-below-exponential-threshold",
+            "description": "1e20 is written out in full decimal digits — the exponential threshold is 1e21, not 1e20",
+            "input": "{\"a\":1.0e20}",
+            "expectedOutput": "{\"a\":100000000000000000000}"
+        },
+        {
+            "id": "large-integer-at-exponential-threshold",
+            "description": "1e21 is exactly at the threshold where ECMAScript Number::toString switches to exponential notation",
+            "input": "{\"a\":1.0e21}",
+            "expectedOutput": "{\"a\":1e+21}"
+        },
+        {
+            "id": "small-fraction-above-exponential-threshold",
+            "description": "1e-6 is still written in plain decimal form — the exponential threshold is 1e-7",
+            "input": "{\"a\":1.0e-6}",
+            "expectedOutput": "{\"a\":0.000001}"
+        },
+        {
+            "id": "small-fraction-at-exponential-threshold",
+            "description": "1e-7 is exactly at the threshold where ECMAScript Number::toString switches to exponential notation",
+            "input": "{\"a\":1.0e-7}",
+            "expectedOutput": "{\"a\":1e-7}"
+        },
+        {
+            "id": "simple-object-sorted",
+            "description": "A flat object's keys are sorted",
+            "input": "{\"b\":2,\"a\":1}",
+            "expectedOutput": "{\"a\":1,\"b\":2}"
+        },
+        {
+            "id": "nested-object-sorted",
+            "description": "A nested object's keys are sorted",
+            "input": "{\"outer\":{\"b\":2,\"a\":1}}",
+            "expectedOutput": "{\"outer\":{\"a\":1,\"b\":2}}"
+        },
+        {
+            "id": "deeply-nested-object-keys-sorted",
+            "description": "Keys are sorted at every level of a deeply nested object (5 levels), regardless of the order they appear in the input",
+            "inputs": [
+                "{\"b\":{\"d\":{\"f\":{\"h\":1,\"g\":2},\"e\":3},\"c\":4},\"a\":5}",
+                "{\"a\":5,\"b\":{\"c\":4,\"d\":{\"e\":3,\"f\":{\"g\":2,\"h\":1}}}}"
+            ],
+            "expectedOutput": "{\"a\":5,\"b\":{\"c\":4,\"d\":{\"e\":3,\"f\":{\"g\":2,\"h\":1}}}}"
+        },
+        {
+            "id": "deeply-nested-object-within-arrays",
+            "description": "Objects nested inside arrays inside nested objects are sorted at every level while the enclosing arrays keep their element order",
+            "inputs": [
+                "{\"root\":{\"z\":[{\"n\":{\"y\":1,\"x\":[{\"q\":2,\"p\":{\"s\":3,\"r\":4}}]}}],\"a\":{\"deep\":{\"deeper\":{\"deepest\":null}}}}}",
+                "{\"root\":{\"a\":{\"deep\":{\"deeper\":{\"deepest\":null}}},\"z\":[{\"n\":{\"x\":[{\"p\":{\"r\":4,\"s\":3},\"q\":2}],\"y\":1}}]}}"
+            ],
+            "expectedOutput": "{\"root\":{\"a\":{\"deep\":{\"deeper\":{\"deepest\":null}}},\"z\":[{\"n\":{\"x\":[{\"p\":{\"r\":4,\"s\":3},\"q\":2}],\"y\":1}}]}}"
+        },
+        {
+            "id": "deeply-nested-empty-object",
+            "description": "An empty object at the bottom of a nesting chain stays an empty object",
+            "input": "{\"a\":{\"b\":{\"c\":{}}}}",
+            "expectedOutput": "{\"a\":{\"b\":{\"c\":{}}}}"
+        },
+        {
+            "id": "unicode-key-sorts-by-utf16-code-unit",
+            "description": "A non-ASCII key (é, U+00E9) sorts after an ASCII key with a smaller code unit value (e, U+0065)",
+            "input": "{\"é\":1,\"e\":2}",
+            "expectedOutput": "{\"e\":2,\"é\":1}"
+        },
+        {
+            "id": "float-with-zero-fraction-collapses-to-integer",
+            "description": "A float literal with a zero fractional part canonicalizes to its integer form",
+            "input": "{\"n\":1.0}",
+            "expectedOutput": "{\"n\":1}"
+        },
+        {
+            "id": "empty-object-top-level",
+            "description": "A top-level empty object canonicalizes to {}",
+            "input": "{}",
+            "expectedOutput": "{}"
+        },
+        {
+            "id": "empty-array-top-level",
+            "description": "A top-level empty array canonicalizes to []",
+            "input": "[]",
+            "expectedOutput": "[]"
+        },
+        {
+            "id": "array-of-objects-different-values",
+            "description": "Keys within each object of an array are sorted independently (additional case with different values than array-of-objects-keys-sorted)",
+            "input": "[{\"b\":2,\"a\":1},{\"d\":4,\"c\":3}]",
+            "expectedOutput": "[{\"a\":1,\"b\":2},{\"c\":3,\"d\":4}]"
+        },
+        {
+            "id": "top-level-null",
+            "description": "A top-level JSON null canonicalizes to null",
+            "input": "null",
+            "expectedOutput": "null"
+        },
+        {
+            "id": "boolean-values-sorted",
+            "description": "Boolean-valued object members, keys sorted",
+            "input": "{\"false\":false,\"true\":true}",
+            "expectedOutput": "{\"false\":false,\"true\":true}"
+        },
+        {
+            "id": "string-escaping-quote-backslash-newline",
+            "description": "Quote, backslash, and newline characters in string values are escaped minimally",
+            "input": "{\"quote\":\"a\\\"b\",\"backslash\":\"a\\\\b\",\"newline\":\"a\\nb\"}",
+            "expectedOutput": "{\"backslash\":\"a\\\\b\",\"newline\":\"a\\nb\",\"quote\":\"a\\\"b\"}"
+        },
+        {
+            "id": "unicode-string-value-not-escaped",
+            "description": "Non-ASCII characters in string values (accented Latin, CJK, emoji) are left unescaped",
+            "input": "{\"text\":\"café 日本語 😀\"}",
+            "expectedOutput": "{\"text\":\"café 日本語 😀\"}"
+        },
+        {
+            "id": "nested-arrays-of-numbers",
+            "description": "Nested arrays preserve element order at every level",
+            "input": "[[1,2],[3,4]]",
+            "expectedOutput": "[[1,2],[3,4]]"
+        },
+        {
+            "id": "complex-mixed-structure",
+            "description": "A mix of nested objects, arrays, booleans, and null all canonicalize together: object keys sorted at every level, array order preserved",
+            "input": "{\"z\":[1,2,3],\"a\":{\"nested\":true,\"array\":[{\"b\":2},{\"a\":1}]},\"m\":null}",
+            "expectedOutput": "{\"a\":{\"array\":[{\"b\":2},{\"a\":1}],\"nested\":true},\"m\":null,\"z\":[1,2,3]}"
+        },
+        {
+            "id": "float-values-no-trailing-zeros",
+            "description": "Float values canonicalize without trailing zeros, including negative values",
+            "input": "{\"float\":1.5,\"zero\":0.0,\"negative\":-42.0}",
+            "expectedOutput": "{\"float\":1.5,\"negative\":-42,\"zero\":0}"
+        },
+        {
+            "id": "empty-string-key-sorts-first",
+            "description": "An empty string key sorts before any non-empty key",
+            "input": "{\"\":\"empty key\",\"a\":\"normal key\"}",
+            "expectedOutput": "{\"\":\"empty key\",\"a\":\"normal key\"}"
+        },
+        {
+            "id": "rfc8785-numbers-example",
+            "description": "A representative mix of ECMAScript Number::toString outputs: shortest round-trippable digits, exponential notation above the 1e21 threshold, plain decimal below it",
+            "input": "{\"numbers\":[333333333.3333333,1.0e30,4.5,6,0.002,0.000002]}",
+            "expectedOutput": "{\"numbers\":[333333333.3333333,1e+30,4.5,6,0.002,0.000002]}"
+        },
+        {
+            "id": "utf16-surrogate-sorts-before-bmp",
+            "description": "Object keys sort by UTF-16 code unit value, not Unicode code point value: U+10000 (encoded in UTF-16 as the surrogate pair D800 DC00) sorts before U+FFFF (a single code unit), even though U+FFFF is numerically the smaller code point. Byte/code-point order would put U+FFFF first — the wrong answer for JCS.",
+            "input": "{\"\\uffff\":1,\"\\ud800\\udc00\":2}",
+            "expectedOutput": "{\"\ud800\udc00\":2,\"\uffff\":1}"
+        },
+        {
+            "id": "invalid-json",
+            "description": "Malformed JSON must raise an error, not silently canonicalize",
+            "input": "{not-json",
+            "expectError": true
+        },
+        {
+            "id": "duplicate-keys-last-wins",
+            "description": "When an object repeats a member name, the last value wins, as in JSON.parse and PHP json_decode",
+            "input": "{\"a\":1,\"b\":2,\"a\":3}",
+            "expectedOutput": "{\"a\":3,\"b\":2}"
+        },
+        {
+            "id": "nesting-511-levels-accepted",
+            "description": "511 levels of nested containers are accepted",
+            "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+            "expectedOutput": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+        },
+        {
+            "id": "nesting-512-levels-rejected",
+            "description": "512 levels of nested containers exceed the maximum depth and must raise an error",
+            "input": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+            "expectError": true
+        },
+        {
+            "id": "lone-surrogate-rejected",
+            "description": "An unpaired UTF-16 surrogate escape is not a Unicode character and has no UTF-8 encoding, so it must raise an error, in a value or a key",
+            "inputs": [
+                "\"\\ud800\"",
+                "{\"\\udc00\":1}",
+                "[\"a\\ud800b\"]"
+            ],
+            "expectError": true
+        },
+        {
+            "id": "number-overflow-rejected",
+            "description": "A number too large for an IEEE 754 double (it would become Infinity) must raise an error",
+            "inputs": ["{\"a\":1e400}", "[-1e400]"],
+            "expectError": true
+        },
+        {
+            "id": "leading-zero-rejected",
+            "description": "A number with a leading zero is not valid JSON",
+            "input": "{\"a\":01}",
+            "expectError": true
+        },
+        {
+            "id": "trailing-comma-rejected",
+            "description": "A trailing comma is not valid JSON",
+            "inputs": ["[1,]", "{\"a\":1,}"],
+            "expectError": true
+        },
+        {
+            "id": "byte-order-mark-rejected",
+            "description": "A leading byte order mark is not valid JSON and must raise an error rather than be skipped",
+            "input": "\ufeff{}",
+            "expectError": true
+        },
+        {
+            "id": "control-characters-escaped",
+            "description": "Control characters are escaped with the short forms where JSON has them (\\b \\f \\n \\r \\t) and as lowercase \\u00XX otherwise; DEL (U+007F) is not a control character for JSON and stays literal",
+            "input": "{\"a\":\"\\u0001\\u001F\\b\\f\\n\\r\\t\\u007f\"}",
+            "expectedOutput": "{\"a\":\"\\u0001\\u001f\\b\\f\\n\\r\\t\u007f\"}"
+        },
+        {
+            "id": "unnecessary-escapes-decoded",
+            "description": "Escapes JCS does not require (for \"/\", non-ASCII, and printable ASCII) are decoded to the literal character",
+            "inputs": ["{\"a\":\"\\u00e9\\/\\u0041\"}", "{\"a\":\"é/A\"}"],
+            "expectedOutput": "{\"a\":\"é/A\"}"
+        },
+        {
+            "id": "top-level-scalar",
+            "description": "A top-level scalar canonicalizes like any value",
+            "input": " \"a\\/b\" ",
+            "expectedOutput": "\"a/b\""
+        }
+    ]
+}

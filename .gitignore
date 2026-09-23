@@ -1,0 +1,24 @@
+# IDE / editor
+.vscode/
+.idea/
+*.iml
+.fleet/
+nbproject/
+.project
+.buildpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.history/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+bin/
+obj/
+TestResults/
+
+# Packages
+artifacts/

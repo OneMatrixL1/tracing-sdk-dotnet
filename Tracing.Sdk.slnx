@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/Tracing.Sdk.Examples/Tracing.Sdk.Examples.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Tracing.Sdk/Tracing.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tracing.Sdk.Tests/Tracing.Sdk.Tests.csproj" />
+  </Folder>
+</Solution>

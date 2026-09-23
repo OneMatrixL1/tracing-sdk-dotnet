@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Tracing.Sdk</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Not every self-explanatory public member carries a doc comment. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>VMatrix.Tracing.Sdk</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>1Matrix</Authors>
+    <Description>Tracing SDK: canonicalize (RFC 8785 JSON Canonicalization Scheme, or W3C Exclusive C14N for XML) and hash (Keccak-256) data-integrity records, then send them to an Indexer service over HTTP.</Description>
+    <PackageTags>tracing;data-integrity;keccak256;jcs;rfc8785;c14n;xml-c14n;blockchain;anchoring</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Reproducible package: same sources, same bytes. -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <!-- Debug symbols ship as a separate .snupkg for the NuGet symbol server. -->
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tracing.Sdk.Tests" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <!-- The vendored Apache-2.0 code requires its license to travel with it. -->
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,285 @@
+{
+    "description": "Rule: parse the XML and serialize it using W3C Canonical XML (C14N) — https://www.w3.org/TR/xml-c14n — which normalizes attribute order and insignificant whitespace between elements. Every language SDK's canonicalizer must produce exactly `expectedOutput` (byte-for-byte) for every string in `input`/`inputs`. External entity resolution MUST be disabled: parsing untrusted XML must never fetch or inline external/SYSTEM entities (XXE).",
+    "format": {
+        "algorithm": "Exclusive XML Canonicalization 1.0 (http://www.w3.org/2001/10/xml-exc-c14n#, https://www.w3.org/TR/xml-exc-c14n/), no comments — only visibly-utilized namespace declarations are emitted, and namespace prefixes remain significant (Exclusive 1.0 has no prefix rewriting). Every namespace declaration must be an absolute RFC 3986 URI (or empty), as libxml's C14N requires — anything else is an error, even on an unused declaration — and namespace declaration values are written without escaping, as libxml writes them (see the `namespace-uri-*` cases).",
+        "attributeOrder": "normalized (C14N-defined order): namespace declarations by prefix, then attributes by namespace URI (no namespace first) and local name",
+        "whitespace": "insignificant whitespace removed exactly as libxml does when parsing with XML_PARSE_NOBLANKS (PHP's `preserveWhiteSpace = false`): whitespace between elements is dropped, but kept when it is an element's whole content, when the element already holds literal text or starts with a text child, under xml:space=\"preserve\", or when written as a character reference (see the `whitespace-*`, `xml-space-*`, and `carriage-return-*` cases). Empty elements are serialized as an explicit open/close tag pair (e.g. `<root/>` becomes `<root></root>`)",
+        "prolog": "the XML declaration (`<?xml version=\"1.0\" encoding=\"...\" standalone=\"...\"?>`), any DOCTYPE, and a leading UTF-8 byte order mark are all DROPPED — C14N 1.0 emits no prolog. Comments are dropped too (canonicalization runs without comments). Output is ALWAYS UTF-8 regardless of the declared encoding, so a document declaring ISO-8859-1 and the same document declaring UTF-8 canonicalize to identical bytes.",
+        "processingInstructions": "KEPT, unlike comments. A PI before the root element is emitted followed by a newline (0x0A); a PI after the root element is emitted preceded by a newline; a PI inside the root is emitted in place with no added whitespace (C14N 1.0 section 2.6)."
+    },
+    "cases": [
+        {
+            "id": "attribute-order-ignored",
+            "description": "Attribute order does not affect output",
+            "inputs": ["<root a=\"1\" b=\"2\"/>", "<root b=\"2\" a=\"1\"/>"],
+            "expectedOutput": "<root a=\"1\" b=\"2\"></root>"
+        },
+        {
+            "id": "whitespace-ignored",
+            "description": "Insignificant whitespace between elements does not affect output",
+            "inputs": ["<root><child>value</child></root>", "<root>\n  <child>value</child>\n</root>\n"],
+            "expectedOutput": "<root><child>value</child></root>"
+        },
+        {
+            "id": "different-content-a",
+            "description": "Different text content must produce different output (case a)",
+            "input": "<root>value1</root>",
+            "expectedOutput": "<root>value1</root>"
+        },
+        {
+            "id": "different-content-b",
+            "description": "Different text content must produce different output (case b, must differ from case a's output)",
+            "input": "<root>value2</root>",
+            "expectedOutput": "<root>value2</root>"
+        },
+        {
+            "id": "repeated-sibling-attribute-order-ignored",
+            "description": "Attribute order within repeated sibling elements does not affect output",
+            "inputs": [
+                "<root><item id=\"1\" type=\"x\"/><item id=\"2\" type=\"y\"/></root>",
+                "<root><item type=\"x\" id=\"1\"/><item type=\"y\" id=\"2\"/></root>"
+            ],
+            "expectedOutput": "<root><item id=\"1\" type=\"x\"></item><item id=\"2\" type=\"y\"></item></root>"
+        },
+        {
+            "id": "repeated-sibling-order-preserved-a",
+            "description": "Order of repeated sibling elements is preserved (case a)",
+            "input": "<root><item id=\"1\"/><item id=\"2\"/></root>",
+            "expectedOutput": "<root><item id=\"1\"></item><item id=\"2\"></item></root>"
+        },
+        {
+            "id": "repeated-sibling-order-preserved-b",
+            "description": "Order of repeated sibling elements is preserved (case b, must differ from case a's output)",
+            "input": "<root><item id=\"2\"/><item id=\"1\"/></root>",
+            "expectedOutput": "<root><item id=\"2\"></item><item id=\"1\"></item></root>"
+        },
+        {
+            "id": "empty-element-tag-forms-equivalent",
+            "description": "A self-closed empty tag and an explicit open/close pair are equivalent",
+            "inputs": ["<root></root>", "<root/>"],
+            "expectedOutput": "<root></root>"
+        },
+        {
+            "id": "xml-declaration-removed",
+            "description": "The XML declaration is not part of the canonical form: present or absent, and whatever version/encoding/standalone it carries, the output is the same",
+            "inputs": [
+                "<root><a>1</a></root>",
+                "<?xml version=\"1.0\"?><root><a>1</a></root>",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root><a>1</a></root>",
+                "<?xml version=\"1.0\" encoding=\"utf-8\" standalone=\"yes\"?>\n<root><a>1</a></root>",
+                "<?xml version=\"1.1\"?><root><a>1</a></root>"
+            ],
+            "expectedOutput": "<root><a>1</a></root>"
+        },
+        {
+            "id": "byte-order-mark-removed",
+            "description": "A leading UTF-8 byte order mark is an encoding artifact, not content, and must not reach the canonical output",
+            "inputs": [
+                "﻿<?xml version=\"1.0\"?><root><a>1</a></root>",
+                "﻿<root><a>1</a></root>"
+            ],
+            "expectedOutput": "<root><a>1</a></root>"
+        },
+        {
+            "id": "declared-encoding-does-not-affect-output",
+            "description": "Canonical output is always UTF-8 whatever the declaration says. All three inputs are pure ASCII bytes carrying the same character (via a numeric character reference, or literally in UTF-8), so a conforming SDK emits the same UTF-8 bytes for each — the é below is C3 A9.",
+            "inputs": [
+                "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><root>caf&#233;</root>",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>caf&#233;</root>",
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><root>café</root>",
+                "<root>café</root>"
+            ],
+            "expectedOutput": "<root>café</root>"
+        },
+        {
+            "id": "doctype-removed",
+            "description": "A DOCTYPE declaration is dropped; the element content it precedes is unaffected",
+            "inputs": [
+                "<?xml version=\"1.0\"?><!DOCTYPE root><root><a>1</a></root>",
+                "<root><a>1</a></root>"
+            ],
+            "expectedOutput": "<root><a>1</a></root>"
+        },
+        {
+            "id": "comments-removed",
+            "description": "Canonicalization runs without comments, so comments before, inside, and after the root element are all dropped",
+            "inputs": [
+                "<?xml version=\"1.0\"?><!-- header --><root><!-- inner --><a>1</a></root><!-- footer -->",
+                "<root><a>1</a></root>"
+            ],
+            "expectedOutput": "<root><a>1</a></root>"
+        },
+        {
+            "id": "processing-instruction-outside-root-kept",
+            "description": "Unlike comments, processing instructions survive canonicalization. One outside the root element is separated from it by a single newline (0x0A): after the PI when the PI precedes the root, before the PI when it follows.",
+            "input": "<?xml version=\"1.0\"?><?target data?><root><a>1</a></root>",
+            "expectedOutput": "<?target data?>\n<root><a>1</a></root>"
+        },
+        {
+            "id": "processing-instruction-after-root-kept",
+            "description": "A trailing processing instruction is kept, preceded by a newline (must differ from the leading-PI case's output)",
+            "input": "<?xml version=\"1.0\"?><root><a>1</a></root><?target data?>",
+            "expectedOutput": "<root><a>1</a></root>\n<?target data?>"
+        },
+        {
+            "id": "processing-instruction-inside-root-kept",
+            "description": "A processing instruction within the root element is emitted in place, with no added whitespace",
+            "input": "<root><?target data?><a>1</a></root>",
+            "expectedOutput": "<root><?target data?><a>1</a></root>"
+        },
+        {
+            "id": "invalid-xml",
+            "description": "Malformed XML (mismatched tags) must raise an error, not silently canonicalize",
+            "input": "<root><unclosed></root>",
+            "expectError": true
+        },
+        {
+            "id": "xxe-external-entity-must-not-resolve",
+            "description": "A DOCTYPE declaring a SYSTEM external entity must never have that entity fetched or inlined. Implementations may satisfy this either by rejecting the document outright (expectError) or by parsing it while leaving the entity unresolved — assert that, whichever happens, the output never contains forbiddenSubstring.",
+            "input": "<?xml version=\"1.0\"?><!DOCTYPE root [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><root>&xxe;</root>",
+            "allowError": true,
+            "forbiddenSubstring": "root:"
+        },
+        {
+            "id": "whitespace-after-literal-text-kept",
+            "description": "Once an element has held literal (non-whitespace) character data, every later whitespace run in it is kept: libxml then treats the element as mixed content",
+            "input": "<r><a/>x<b/> <c/></r>",
+            "expectedOutput": "<r><a></a>x<b></b> <c></c></r>"
+        },
+        {
+            "id": "whitespace-after-reference-text-dropped",
+            "description": "Text produced by an entity or character reference does not make content mixed, so whitespace after it between elements is still dropped",
+            "input": "<r><a/>&amp;<b/> <c/></r>",
+            "expectedOutput": "<r><a></a>&amp;<b></b><c></c></r>"
+        },
+        {
+            "id": "whitespace-after-cdata-dropped",
+            "description": "A CDATA section does not make content mixed, so whitespace after it between elements is still dropped; the CDATA itself becomes plain text",
+            "input": "<r><a/><![CDATA[x]]> <c/></r>",
+            "expectedOutput": "<r><a></a>x<c></c></r>"
+        },
+        {
+            "id": "character-reference-whitespace-kept",
+            "description": "Whitespace written as a character reference is character data, not insignificant whitespace, and is always kept",
+            "input": "<r><a/>&#32;<b/></r>",
+            "expectedOutput": "<r><a></a> <b></b></r>"
+        },
+        {
+            "id": "leading-text-child-keeps-whitespace",
+            "description": "When an element's first child is text (here from a character reference), later whitespace runs in it are kept",
+            "input": "<r>&#32;<a/> </r>",
+            "expectedOutput": "<r> <a></a> </r>"
+        },
+        {
+            "id": "whitespace-only-content-kept",
+            "description": "Whitespace that is an element's entire content is kept",
+            "input": "<r> </r>",
+            "expectedOutput": "<r> </r>"
+        },
+        {
+            "id": "carriage-return-splits-character-data",
+            "description": "Character data is processed in chunks split at carriage returns: here the run before the CR is dropped as insignificant, while the run after it, directly followed by the end tag of a still-empty element, is kept. The CR LF itself normalizes to LF.",
+            "input": "<r>  \r\n  </r>",
+            "expectedOutput": "<r>\n  </r>"
+        },
+        {
+            "id": "crlf-indentation-removed",
+            "description": "Indentation is dropped the same way whether lines end in CR LF or LF",
+            "inputs": [
+                "<r>\r\n  <a/>\r\n</r>",
+                "<r>\n  <a/>\n</r>",
+                "<r><a/></r>"
+            ],
+            "expectedOutput": "<r><a></a></r>"
+        },
+        {
+            "id": "xml-space-preserve-keeps-whitespace",
+            "description": "xml:space=\"preserve\" keeps all whitespace in the element and its descendants",
+            "input": "<r xml:space=\"preserve\"> <a> </a> <b/></r>",
+            "expectedOutput": "<r xml:space=\"preserve\"> <a> </a> <b></b></r>"
+        },
+        {
+            "id": "xml-space-default-restores-stripping",
+            "description": "xml:space=\"default\" inside a preserved element switches whitespace stripping back on",
+            "input": "<r xml:space=\"preserve\"> <a xml:space=\"default\"> <b/> </a></r>",
+            "expectedOutput": "<r xml:space=\"preserve\"> <a xml:space=\"default\"><b></b></a></r>"
+        },
+        {
+            "id": "xml-space-default-never-becomes-mixed",
+            "description": "Under an explicit xml:space=\"default\", literal text does not switch the element to mixed content, but whitespace after a text first child is still kept",
+            "input": "<r xml:space=\"default\">x <a/> <b/></r>",
+            "expectedOutput": "<r xml:space=\"default\">x <a></a> <b></b></r>"
+        },
+        {
+            "id": "unicode-line-separators-not-line-endings",
+            "description": "U+2028, U+2029 and U+0085 are ordinary characters in XML 1.0, not line endings, and are kept as-is",
+            "input": "<r>a\u2028b\u2029c\u0085d</r>",
+            "expectedOutput": "<r>a\u2028b\u2029c\u0085d</r>"
+        },
+        {
+            "id": "only-used-namespaces-emitted",
+            "description": "Exclusive C14N emits a namespace declaration only on the element that visibly uses it, and drops unused ones",
+            "input": "<r xmlns=\"urn:u\" xmlns:p=\"urn:p\" xmlns:unused=\"urn:z\"><p:a p:x=\"1\" y=\"2\"/></r>",
+            "expectedOutput": "<r xmlns=\"urn:u\"><p:a xmlns:p=\"urn:p\" y=\"2\" p:x=\"1\"></p:a></r>"
+        },
+        {
+            "id": "namespace-and-attribute-order",
+            "description": "Namespace declarations sort by prefix; attributes sort by namespace URI (no namespace first), then local name",
+            "inputs": [
+                "<r xmlns:b=\"urn:b\" xmlns:a=\"urn:a\"><x b:k=\"1\" a:k=\"2\" k=\"3\"/></r>",
+                "<r xmlns:a=\"urn:a\" xmlns:b=\"urn:b\"><x k=\"3\" a:k=\"2\" b:k=\"1\"/></r>"
+            ],
+            "expectedOutput": "<r><x xmlns:a=\"urn:a\" xmlns:b=\"urn:b\" k=\"3\" a:k=\"2\" b:k=\"1\"></x></r>"
+        },
+        {
+            "id": "default-namespace-undeclaration",
+            "description": "An element that leaves an inherited default namespace carries xmlns=\"\"",
+            "input": "<r xmlns=\"urn:u\"><a xmlns=\"\"/></r>",
+            "expectedOutput": "<r xmlns=\"urn:u\"><a xmlns=\"\"></a></r>"
+        },
+        {
+            "id": "special-characters-escaped",
+            "description": "Attribute values escape & < \" and tab/LF/CR as character references; text escapes & < > and CR",
+            "input": "<r a=\"x&#9;y&#10;z&#13;&quot;&lt;&amp;>\">&gt;&#13;&amp;&lt;\"</r>",
+            "expectedOutput": "<r a=\"x&#x9;y&#xA;z&#xD;&quot;&lt;&amp;>\">&gt;&#xD;&amp;&lt;\"</r>"
+        },
+        {
+            "id": "namespace-uri-ampersand-unescaped",
+            "description": "Namespace declaration values are written without escaping, as libxml writes them: \"&\" is the one character a valid namespace URI can hold that C14N would otherwise escape. Ordinary attribute values are still escaped.",
+            "input": "<r xmlns:p=\"http://x/?a=1&amp;b=2\"><p:x p:k=\"1&amp;2\"/></r>",
+            "expectedOutput": "<r><p:x xmlns:p=\"http://x/?a=1&b=2\" p:k=\"1&amp;2\"></p:x></r>"
+        },
+        {
+            "id": "namespace-uri-forms-accepted",
+            "description": "Any absolute RFC 3986 URI is a valid namespace name, including IP-literal hosts, ports, queries, and fragments (a fragment may contain \"[\" and \"]\")",
+            "input": "<r xmlns:a=\"http://[::1]:8080/p?q=1#f[1]\" xmlns:b=\"urn:%41:x\" xmlns:c=\"mailto:a@b\"><a:x/><b:x/><c:x/></r>",
+            "expectedOutput": "<r><a:x xmlns:a=\"http://[::1]:8080/p?q=1#f[1]\"></a:x><b:x xmlns:b=\"urn:%41:x\"></b:x><c:x xmlns:c=\"mailto:a@b\"></c:x></r>"
+        },
+        {
+            "id": "relative-namespace-uri-rejected",
+            "description": "Exclusive C14N cannot canonicalize a relative namespace URI, even one the output would never use",
+            "inputs": ["<r xmlns:p=\"relative\"><a/></r>", "<r xmlns=\"u\"/>"],
+            "expectError": true
+        },
+        {
+            "id": "invalid-namespace-uri-rejected",
+            "description": "A namespace URI that is not a valid RFC 3986 URI — a space, non-ASCII, a character URIs never allow, a bad percent-escape, an empty port, a \"[\" outside an IP literal, or two fragments — cannot be canonicalized",
+            "inputs": [
+                "<r xmlns:p=\"urn:a b\"><p:x/></r>",
+                "<r xmlns:p=\"urn:café\"><p:x/></r>",
+                "<r xmlns:p=\"urn:a{b\"><p:x/></r>",
+                "<r xmlns:p=\"urn:%zz\"><p:x/></r>",
+                "<r xmlns:p=\"http://x:/\"><p:x/></r>",
+                "<r xmlns:p=\"http://x/a[b\"><p:x/></r>",
+                "<r xmlns:p=\"urn:x#a#b\"><p:x/></r>"
+            ],
+            "expectError": true
+        },
+        {
+            "id": "dtd-internal-entity-rejected",
+            "description": "Entities declared in a DTD are never expanded: referencing one is an error, like any undeclared entity",
+            "input": "<!DOCTYPE r [<!ENTITY e \"x\">]><r>&e;</r>",
+            "expectError": true
+        }
+    ]
+}
