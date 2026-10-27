@@ -7,12 +7,16 @@ namespace Tracing.Sdk.Examples;
 /// <summary>
 /// Steps 2 and 3 of a draw (docs/TICKETS-INTEGRATION.md, "Lock" and
 /// "Timestamp"): lock the draw, ask a timestamp authority to sign its
-/// drawRoot, then anchor that token with eventType=lockts.
+/// drawRoot, then anchor that token with eventType=lockts. Without a real
+/// authority's answer in resp.tsr, a mock one (MockTsa.cs) signs it instead.
 /// </summary>
 internal static class TicketsLockExample
 {
     /// <summary>The TSA's DER answer; set TSA_RESPONSE to point elsewhere.</summary>
     private static readonly string TsaResponse = Environment.GetEnvironmentVariable("TSA_RESPONSE") ?? "resp.tsr";
+
+    /// <summary>Where the mock answer is written, to look at with `openssl ts -reply -in resp.mock.tsr -text`.</summary>
+    private const string MockResponse = "resp.mock.tsr";
 
     public static async Task RunAsync()
     {
@@ -41,15 +45,26 @@ internal static class TicketsLockExample
         var imprint = Hashes.LockTimestampImprint(drawRoot);
         Console.WriteLine($"[lockts] imprint to timestamp: sha256 {Convert.ToHexStringLower(imprint)}");
 
-        if (!File.Exists(TsaResponse))
+        byte[] token;
+
+        if (File.Exists(TsaResponse))
         {
+            token = File.ReadAllBytes(TsaResponse);
+            Console.WriteLine($"[lockts] using the TSA answer in {TsaResponse}");
+        }
+        else
+        {
+            // The token is valid for this drawRoot only: locking again after a
+            // new batch changes it, so a fresh mock is made on every run.
+            token = MockTsa.TimeStamp(imprint);
+            File.WriteAllBytes(MockResponse, token);
             Console.WriteLine($"""
-                [lockts] no TSA answer at {TsaResponse}. Get one, then run this example again:
+                [lockts] no TSA answer at {TsaResponse}: using a MOCK token (self-signed, examples only), saved as {MockResponse}
+                  For a real one:
                   printf '%s' '{drawRoot[2..]}' | xxd -r -p > drawroot.bin
                   openssl ts -query -data drawroot.bin -sha256 -cert -out req.tsq
                   curl -s -H 'Content-Type: application/timestamp-query' --data-binary @req.tsq "$TSA_URL" -o {TsaResponse}
                 """);
-            return;
         }
 
         // A bytes field takes the DER as a byte[]; it goes on chain whole.
@@ -58,7 +73,7 @@ internal static class TicketsLockExample
             var stamped = await sdk.AnchorAsync(Tickets.LockTs, new Dictionary<string, object?>
             {
                 ["draw"] = Draw,
-                ["signature"] = File.ReadAllBytes(TsaResponse),
+                ["signature"] = token,
             });
 
             Console.WriteLine($"[lockts] {Draw} -> drawRoot {stamped.Key}, anchorId {stamped.AnchorId}");

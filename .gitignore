@@ -22,3 +22,6 @@ TestResults/
 
 # Packages
 artifacts/
+
+# Timestamp tokens the tickets-lock example reads or writes.
+*.tsr

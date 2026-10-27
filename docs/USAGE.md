@@ -410,7 +410,7 @@ var links = sdk.VerificationLinks(batch, k => ticketIds[k]);
 
 // 2. Lock, once the last batch has answered 200. The backend derives the drawRoot.
 var locked = await sdk.AnchorAsync(Tickets.Lock, new Dictionary<string, object?> { ["draw"] = draw });
-byte[] imprint = Hashes.LockTimestampImprint(locked.Key!); // have a TSA sign this
+byte[] imprint = Hashes.LockTimestampImprint(locked.Key!); // have a TSA sign this (§7.6)
 
 // 3. Timestamp: the TSA's DER answer goes on chain whole.
 await sdk.AnchorAsync(Tickets.LockTs, new Dictionary<string, object?> { ["draw"] = draw, ["signature"] = tsaResponseDer });
@@ -423,6 +423,46 @@ await sdk.AnchorAsync(Tickets.Subagent, new Dictionary<string, object?> { ["hash
 
 The runnable versions are the `tickets-batch`, `tickets-lock` and `tickets-records` examples ([§8](#8-runnable-examples)). [`config/custom-events.example.json`](../examples/Tracing.Sdk.Examples/config/custom-events.example.json) and the `custom` example show the same calls for a schema the SDK does not ship.
 
+### 7.6 Timestamping a lock — `lockts`
+
+`lockts` carries an RFC 3161 token from a timestamp authority (TSA) over the drawRoot that `lock` returned. The SDK neither calls a TSA nor checks the token; the Indexer checks it.
+
+1. **Imprint.** The token must imprint SHA-256 over the **32 raw bytes** of the drawRoot, not over its hex text. `Hashes.LockTimestampImprint(drawRoot)` computes it.
+2. **Request.** Ask the TSA to include its certificate, because the Indexer verifies the signature with the certificate inside the token. With OpenSSL:
+
+   ```bash
+   DRAW_ROOT=0x...   # result.Key of the lock
+   printf '%s' "${DRAW_ROOT#0x}" | xxd -r -p > drawroot.bin
+   openssl ts -query -data drawroot.bin -sha256 -cert -out req.tsq
+   curl -s -H 'Content-Type: application/timestamp-query' --data-binary @req.tsq "$TSA_URL" -o resp.tsr
+   ```
+
+3. **Send.** Pass the DER bytes as they came back, either the whole `TimeStampResp` or just the `TimeStampToken`. The `bytes` field takes a `byte[]`, so `File.ReadAllBytes("resp.tsr")` works as it is.
+
+```csharp
+try
+{
+    await sdk.AnchorAsync(Tickets.LockTs, new Dictionary<string, object?>
+    {
+        ["draw"] = draw,
+        ["signature"] = File.ReadAllBytes("resp.tsr"),
+    });
+}
+catch (IndexerException e) when (e.ErrorCode == "INVALID_TIMESTAMP")
+{
+    // A check failed; e.ServerMessage says which one. The usual cause is a
+    // token for an older drawRoot: locking again after a new batch replaces it.
+}
+catch (IndexerException e) when (e.ErrorCode == "DRAW_NOT_LOCKED")
+{
+    // Send lock first.
+}
+```
+
+A token is valid for one drawRoot only. Request it **after** the final lock, and request a new one if the draw is locked again.
+
+**Developing without a TSA.** The `tickets-lock` example signs the imprint with [`MockTsa.cs`](../examples/Tracing.Sdk.Examples/MockTsa.cs) when no `resp.tsr` is present. MockTsa is a throwaway self-signed authority, built with BouncyCastle, whose certificate meets the Indexer's checks: one signer, a critical extended key usage of timestamping only, and a certificate that is valid at the token's time. An Indexer built without trusted TSA roots (`params.tsaRootsPEM`) accepts the mock token, because such an Indexer checks only the drawRoot a token covers, not who issued it. An Indexer built with trusted roots refuses the mock token with `INVALID_TIMESTAMP`, as it should. Never anchor a mock token for a real draw.
+
 ---
 
 ## 8. Runnable examples
@@ -432,15 +472,20 @@ The runnable versions are the `tickets-batch`, `tickets-lock` and `tickets-recor
 | Name | File | Shows |
 | --- | --- | --- |
 | `tickets-batch` | [`TicketsBatchExample.cs`](../examples/Tracing.Sdk.Examples/TicketsBatchExample.cs) | Hash tickets with `LeavesFor()`, anchor two consecutive `batch` requests (retrying `CONFIRMATION_TIMEOUT`), print one portal link per ticket |
-| `tickets-lock` | [`TicketsLockExample.cs`](../examples/Tracing.Sdk.Examples/TicketsLockExample.cs) | `lock` a draw, print the TSA imprint, anchor the TSA token (`resp.tsr`, or `TSA_RESPONSE`) with `lockts` |
+| `tickets-lock` | [`TicketsLockExample.cs`](../examples/Tracing.Sdk.Examples/TicketsLockExample.cs) | `lock` a draw, print the TSA imprint, anchor the TSA token with `lockts`: a real one from `resp.tsr` (or `TSA_RESPONSE`), else a mock one from [`MockTsa.cs`](../examples/Tracing.Sdk.Examples/MockTsa.cs), saved as `resp.mock.tsr` |
 | `tickets-records` | [`TicketsRecordsExample.cs`](../examples/Tracing.Sdk.Examples/TicketsRecordsExample.cs) | Hash and anchor `events`, `recon` and `subagent` records, print their links |
 | `custom` | [`CustomEventExample.cs`](../examples/Tracing.Sdk.Examples/CustomEventExample.cs) | A `shipment` type from [`custom-events.example.json`](../examples/Tracing.Sdk.Examples/config/custom-events.example.json) |
 
-Set the endpoint and token in [`ExampleSettings.cs`](../examples/Tracing.Sdk.Examples/ExampleSettings.cs); the `TRACING_API_KEY` environment variable replaces the token, so the key never has to be written into the code. The event types come from the JSON files in [`config/`](../examples/Tracing.Sdk.Examples/config/). Then run an example by name:
+Set the endpoint (`http://localhost:8080` by default) and the token in [`ExampleSettings.cs`](../examples/Tracing.Sdk.Examples/ExampleSettings.cs). The `TRACING_API_KEY` environment variable replaces the token, so the key never has to be written into the code. The event types come from the JSON files in [`config/`](../examples/Tracing.Sdk.Examples/config/). Then run an example by name:
 
 ```bash
 TRACING_API_KEY=<your key> dotnet run --project examples/Tracing.Sdk.Examples -- tickets-batch
 ```
+
+- **Order.** Run the tickets examples in the order of a draw: `tickets-batch`, then `tickets-lock`, then `tickets-records`. A lock before any confirmed batch is refused with `DRAW_HAS_NO_BATCH`.
+- **Re-runs.** The examples can run again safely. `tickets-batch` resends the same tickets, so the Indexer answers the same trees and anchors nothing twice. `tickets-lock` locks again, which yields the same drawRoot while no batch was added, and makes a fresh mock token each time.
+- **Token files.** `tickets-lock` reads `resp.tsr` and writes `resp.mock.tsr` in the current directory. `*.tsr` files are ignored by git.
+- **`custom`** needs a backend plugin that declares `shipment`. Without one, the Indexer answers `UNKNOWN_EVENT_TYPE`, and the example reports that the record was validated and sent but the type is unknown there.
 
 ---
 
@@ -448,6 +493,9 @@ TRACING_API_KEY=<your key> dotnet run --project examples/Tracing.Sdk.Examples --
 
 ```csharp
 new TracingSdk(TracingSdkConfig config)
+    // TracingSdkConfig { Endpoint, Auth, Options?, EventTypes?, Portal? }
+    // AuthConfig.ApiToken(token) / Basic(username, password) / Mtls(cert, key, caCert?, passphrase?)
+    // PortalConfig { BaseUrl = PortalConfig.DefaultBaseUrl, ParamNames = new PortalParamNames(EventType: "type", TicketId: "ticketId") }
 
 Task<AnchorResult> AnchorAsync(string eventType, IReadOnlyDictionary<string, object?> | JsonObject fields,
                                SendOptions? options = null, CancellationToken ct = default)
@@ -469,6 +517,13 @@ static byte[] Hashes.Record(rawData, DataType) / Leaf(rawData, DataType, byte pr
 static IReadOnlyList<byte[]> Hashes.Leaves(rawData[], DataType, byte prefix = 0x00)
 static byte[] Hashes.LockTimestampImprint(string | byte[] drawRoot)
 static string Keccak256Hasher.ToHex(byte[] bytes)             // "0x…" lowercase hex, for display or storage
+```
+
+Exceptions, all deriving from `TracingSdkException`:
+
+```csharp
+ConfigException, CanonicalizationException, TransportException
+IndexerException : TransportException   // StatusCode, Body, ErrorCode, Field, Index, ServerMessage, BatchId
 ```
 
 `SendOptions`:
