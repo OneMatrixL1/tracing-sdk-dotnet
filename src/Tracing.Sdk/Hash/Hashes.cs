@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using Tracing.Sdk.Canonicalize;
-using Tracing.Sdk.Verify;
+using Tracing.Sdk.Events;
 
 namespace Tracing.Sdk.Hash;
 
@@ -80,9 +80,9 @@ public static class Hashes
     /// message imprint the timestamp authority must sign for <c>lockts</c>.
     /// </summary>
     /// <param name="drawRoot">the <c>key</c> a <c>lock</c> answered, 0x hex</param>
-    /// <exception cref="ConfigException">drawRoot is not 32 bytes of hex</exception>
+    /// <exception cref="ConfigException">drawRoot is not 32 non-zero bytes of hex</exception>
     public static byte[] LockTimestampImprint(string drawRoot) =>
-        SHA256.HashData(Convert.FromHexString(AnchoredEventDecoder.NormalizeHash(drawRoot, "drawRoot")[2..]));
+        SHA256.HashData(Convert.FromHexString(FieldValidator.Bytes32(drawRoot ?? throw new ConfigException("drawRoot is required"), "drawRoot")[2..]));
 
     /// <inheritdoc cref="LockTimestampImprint(string)"/>
     public static byte[] LockTimestampImprint(byte[] drawRoot)

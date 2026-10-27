@@ -3,37 +3,24 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Tracing.Sdk.Transport;
 
-/// <summary>A { hash, signingTime } entry as sent to the Indexer.</summary>
-internal sealed record AnchorEntry(string Hash, object SigningTime);
-
 /// <summary>The SDK's contact with the Indexer; swappable in tests.</summary>
 internal interface IIndexerTransport : IDisposable
 {
-    Task<IndexerResponse> SendSingleAsync(AnchorEntry entry, int? timeoutMs, CancellationToken cancellationToken);
-
-    Task<IndexerResponse> SendBatchAsync(IReadOnlyList<AnchorEntry> entries, int? timeoutMs, CancellationToken cancellationToken);
-
-    Task<HttpAnswer> QueryByHashAsync(string hash, int? timeoutMs, CancellationToken cancellationToken);
-
     Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken);
 }
 
 /// <summary>
-/// POST /api/anchors for a single record, POST /api/anchors/batch for a
-/// batch, GET /api/anchors?hash=... to look an anchor up, and
-/// POST /api/anchors?eventType=... for a record of a configured event type.
+/// POST /api/anchors?eventType=... for one record of a configured event type.
 /// Redirects are never followed.
 /// </summary>
 internal sealed class IndexerTransport : IIndexerTransport
 {
     private readonly HttpClient _client;
-    private readonly string _singleUrl;
-    private readonly string _batchUrl;
+    private readonly string _anchorsUrl;
     private readonly int _timeoutMs;
 
     /// <exception cref="ConfigException">an mTLS certificate or key cannot be loaded</exception>
@@ -59,40 +46,18 @@ internal sealed class IndexerTransport : IIndexerTransport
                 break;
         }
 
-        var baseUrl = baseEndpoint.TrimEnd('/');
-        _singleUrl = baseUrl + "/api/anchors";
-        _batchUrl = baseUrl + "/api/anchors/batch";
+        _anchorsUrl = baseEndpoint.TrimEnd('/') + "/api/anchors";
         _timeoutMs = timeoutMs;
     }
-
-    public Task<IndexerResponse> SendSingleAsync(AnchorEntry entry, int? timeoutMs, CancellationToken cancellationToken) =>
-        PostAsync(_singleUrl, ToJson(entry), 1, timeoutMs, cancellationToken);
-
-    public Task<IndexerResponse> SendBatchAsync(IReadOnlyList<AnchorEntry> entries, int? timeoutMs, CancellationToken cancellationToken) =>
-        PostAsync(_batchUrl, new JsonArray(entries.Select(e => (JsonNode)ToJson(e)).ToArray()), entries.Count, timeoutMs, cancellationToken);
-
-    /// <summary>
-    /// GET /api/anchors?hash=... — the Indexer responds with
-    /// { "hash": "&lt;hash hex&gt;", "proof": ["&lt;proof hex&gt;", ...], "proofType": "transactionHash" }.
-    /// </summary>
-    public Task<HttpAnswer> QueryByHashAsync(string hash, int? timeoutMs, CancellationToken cancellationToken) =>
-        ExecuteAsync(HttpMethod.Get, _singleUrl + "?hash=" + Uri.EscapeDataString(hash), null, timeoutMs, cancellationToken);
 
     /// <summary>
     /// POST /api/anchors?eventType=... with the request body of that event
     /// type, already validated and normalized.
     /// </summary>
     public Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken) =>
-        ExecuteAsync(HttpMethod.Post, _singleUrl + "?eventType=" + Uri.EscapeDataString(eventType), payload.ToJsonString(), timeoutMs, cancellationToken);
+        ExecuteAsync(HttpMethod.Post, _anchorsUrl + "?eventType=" + Uri.EscapeDataString(eventType), payload.ToJsonString(), timeoutMs, cancellationToken);
 
     public void Dispose() => _client.Dispose();
-
-    private async Task<IndexerResponse> PostAsync(string url, JsonNode payload, int recordCount, int? timeoutMs, CancellationToken cancellationToken)
-    {
-        var answer = await ExecuteAsync(HttpMethod.Post, url, payload.ToJsonString(), timeoutMs, cancellationToken).ConfigureAwait(false);
-
-        return new IndexerResponse(answer.StatusCode, answer.Body, answer.Json, recordCount);
-    }
 
     private async Task<HttpAnswer> ExecuteAsync(HttpMethod method, string url, string? body, int? timeoutMs, CancellationToken cancellationToken)
     {
@@ -107,21 +72,6 @@ internal sealed class IndexerTransport : IIndexerTransport
         return answer;
     }
 
-    private static JsonObject ToJson(AnchorEntry entry)
-    {
-        JsonNode? signingTime;
-
-        try
-        {
-            signingTime = JsonSerializer.SerializeToNode(entry.SigningTime);
-        }
-        catch (Exception e) when (e is NotSupportedException or JsonException or InvalidOperationException)
-        {
-            throw new TransportException("Failed to encode request payload: " + e.Message, e);
-        }
-
-        return new JsonObject { ["hash"] = entry.Hash, ["signingTime"] = signingTime };
-    }
 
     /// <summary>
     /// Present the client certificate, and when a CA is given trust only it

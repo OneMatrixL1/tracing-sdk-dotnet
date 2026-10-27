@@ -113,7 +113,7 @@ public sealed class EventTypeRegistry
         }
     }
 
-    internal static IReadOnlyList<EventTypeDefinition> ParseEventTypes(JsonElement root)
+    private static IReadOnlyList<EventTypeDefinition> ParseEventTypes(JsonElement root)
     {
         var list = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("eventTypes", out var eventTypes) ? eventTypes : root;
 

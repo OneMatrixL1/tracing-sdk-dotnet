@@ -1,8 +1,8 @@
 # Tracing SDK (.NET) — Usage Guide
 
-The SDK does three things for every record you hand it: **canonicalize** it, **hash** it with Keccak-256, and **send** the hash to an Indexer service. Once anchored, a record can be looked up by its hash ([§7](#7-querying-an-anchor-by-hash)) and checked against the chain itself ([§8](#8-verifying-an-anchor-against-the-chain)).
+The SDK sends records to an Indexer service as **event types**: the default `anchor` type, the types of the tickets plugin, or any schema you describe in code or JSON ([§7](#7-event-types-tickets-and-other-schemas)). For each record it can **canonicalize** and **hash** the data with Keccak-256, **validate** the request against the event type's fields, **send** it, and build the **link to the integrity portal** that verifies it. Lookup and on-chain verification happen in the portal, not in the SDK.
 
-The API mirrors the PHP SDK; the differences are .NET idioms — network calls are `async` and take a `CancellationToken`, configuration and results are typed, and the data type is an enum.
+Network calls are `async` and take a `CancellationToken`, and the configuration and results are typed.
 
 ---
 
@@ -20,6 +20,7 @@ dotnet add package VMatrix.Tracing.Sdk
 
 ```csharp
 using Tracing.Sdk;
+using Tracing.Sdk.Events;
 using Tracing.Sdk.Hash; // Keccak256Hasher.ToHex, to print a hash as 0x-hex
 
 using var sdk = new TracingSdk(new TracingSdkConfig
@@ -29,12 +30,14 @@ using var sdk = new TracingSdk(new TracingSdkConfig
 
     // Default options for every call. Optional if every call passes its own SendOptions.
     Options = new SendOptions(
-        DataType.Json,              // dataType
-        5000,                       // timeoutMs
-        "https://rpc.example.com"), // rpcUrl — only needed for VerifyAsync()
+        DataType.Json,  // dataType, for hashing
+        60_000),        // timeoutMs
 
     // Required.
     Auth = AuthConfig.ApiToken("your-api-token"),
+
+    // The event types AnchorAsync() accepts; without it, only "anchor".
+    EventTypes = EventTypeRegistry.FromJsonFile("tickets-events.json"),
 });
 ```
 
@@ -43,72 +46,39 @@ using var sdk = new TracingSdk(new TracingSdkConfig
 | `Endpoint` | yes | Indexer base URL. A trailing `/` is trimmed. |
 | `Auth` | yes | See [Authentication](#5-authentication). |
 | `Options` | no | A `SendOptions` used as the default for every call. |
+| `EventTypes` | no | The event types `AnchorAsync()` accepts ([§7.1](#71-defining-event-types)). Default: only `anchor`. |
+| `Portal` | no | Where verification links point ([§7.4](#74-verification-links)). Default: `https://integrity.vmatrix.com/v1/`. |
 
-Invalid or missing config throws `ConfigException` **at construction time**, so a missing certificate file fails immediately rather than on the first send.
+Invalid or missing config throws `ConfigException` **at construction time**, so a missing certificate file or an inconsistent event type fails immediately rather than on the first send.
 
 `TracingSdk` owns its HTTP connections and is safe to share: create one and keep it for the application's lifetime (for example as a singleton in dependency injection), or dispose it when done.
 
 ---
 
-## 3. Sending records
+## 3. Sending and hashing records
 
-### 3.1 One record — `SendAsync()`
+### 3.1 Sending — `AnchorAsync()`
 
-`SendAsync()` canonicalizes, hashes, and POSTs `{endpoint}/api/anchors`.
-
-```csharp
-var rawData = JsonSerializer.Serialize(new { orderId = 1, amount = 250000 });
-var signingTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-try
-{
-    var result = await sdk.SendAsync(rawData, signingTime);
-
-    Console.WriteLine(Keccak256Hasher.ToHex(result.Hash)); // 0x1c8a… (Hash is the 32-byte digest)
-    Console.WriteLine(result.Response.StatusCode);    // 200
-    Console.WriteLine(result.Response.RecordCount);   // 1
-    Console.WriteLine(result.Response.Body);          // raw response body
-    // result.Response.Json is the body parsed as a JsonElement, or null if it is not JSON.
-}
-catch (TransportException e)
-{
-    // Network failure, timeout, or the Indexer answered with a non-2xx status.
-    Console.Error.WriteLine(e.Message);
-}
-```
-
-`rawData` is a `string` (hashed as its UTF-8 bytes) or a `byte[]`. A string holding an unpaired surrogate has no UTF-8 form and throws `CanonicalizationException`.
-
-`signingTime` is any value `System.Text.Json` can serialize, passed through to the Indexer untouched — whatever your Indexer expects (Unix timestamp, ISO-8601 string) is what you should send. It may not be `null`.
-
-### 3.2 Several records — `SendBatchAsync()`
-
-`SendBatchAsync()` hashes every record, then POSTs them all in **one** request to `{endpoint}/api/anchors/batch`.
+Every record is sent with `AnchorAsync()` to `POST {endpoint}/api/anchors?eventType=<name>`. The default `anchor` type is always registered and takes a record hash and its signing time:
 
 ```csharp
-var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+var hash = sdk.Hash(JsonSerializer.Serialize(new { orderId = 1, amount = 250000 }));
 
-var results = await sdk.SendBatchAsync(
-[
-    new BatchRecord(JsonSerializer.Serialize(new { orderId = 1 }), now),
-    new BatchRecord(JsonSerializer.Serialize(new { orderId = 2 }), now),
-    new BatchRecord(JsonSerializer.Serialize(new { orderId = 3 }), now),
-]);
-
-foreach (var (result, i) in results.Select((r, i) => (r, i)))
+var result = await sdk.AnchorAsync("anchor", new Dictionary<string, object?>
 {
-    Console.WriteLine($"#{i} {Keccak256Hasher.ToHex(result.Hash)} -> HTTP {result.Response.StatusCode}");
-}
+    ["hash"] = hash,                                              // byte[] or "0x…" hex
+    ["signingTime"] = (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+});
+
+Console.WriteLine($"{result.StatusCode} {result.AnchorId}");     // 202 9b2f4c1e-…
+Console.WriteLine(sdk.VerificationLink(result));                 // the portal link that verifies it
 ```
 
-- One result is returned per input record, **in input order**.
-- Each result carries its own `Hash`, and all results share the single `Response` of that one request (`RecordCount` = number of records sent).
-- Every record in a batch is canonicalized with the **same** data type. Mixed types → separate calls.
-- A `null` record, or one without `RawData`/`SigningTime`, throws `ConfigException` *before* anything is sent.
+Other types (tickets, your own schemas), how fields are validated, what `AnchorResult` holds, and verification links are covered in [§7](#7-event-types-tickets-and-other-schemas).
 
-### 3.3 Hash without sending — `Hash()`
+### 3.2 Hashing — `Hash()`
 
-Synchronous. Useful for pre-computing a hash, deduplicating, or storing it locally before deciding to anchor.
+`Hash()` canonicalizes and hashes a record without sending it. It is synchronous.
 
 ```csharp
 byte[] a = sdk.Hash(JsonSerializer.Serialize(new { orderId = 1 }));   // config default type
@@ -116,13 +86,15 @@ byte[] b = sdk.Hash(xmlString, SendOptions.ForDataType(DataType.Xml)); // per-ca
 string hex = Keccak256Hasher.ToHex(a);                               // "0x…", as the Indexer shows it
 ```
 
-Hashing is deterministic: the same record always produces the same hash, on any machine, in any SDK language.
+`rawData` is a `string` (hashed as its UTF-8 bytes) or a `byte[]`. A string holding an unpaired surrogate has no UTF-8 form and throws `CanonicalizationException`.
+
+Hashing is deterministic: the same record always produces the same hash, on any machine, in any SDK language. `HashFor()` and `LeavesFor()` hash the way a given event type says, and `Hashes.*` offers the same without an SDK instance ([§7.3](#73-hashing-records)).
 
 ---
 
-## 4. Options: data type, timeout & RPC URL
+## 4. Options: data type & timeout
 
-`SendOptions` is an immutable object carrying three settings — `DataType`, `TimeoutMs`, and `RpcUrl`. It can be given as the config default, per call, or both.
+`SendOptions` is an immutable object carrying two settings, `DataType` and `TimeoutMs`. It can be given as the config default, per call, or both.
 
 ### 4.1 Data types & canonicalization
 
@@ -136,47 +108,31 @@ Resolution order:
 
 ```csharp
 // 1. Config default
-await sdk.SendAsync(rawJson, signingTime);
+sdk.Hash(rawJson);
 
 // 2. Per-call override — wins over the config default
-await sdk.SendAsync(rawXml, signingTime, SendOptions.ForDataType(DataType.Xml));
-await sdk.SendBatchAsync(xmlRecords, SendOptions.ForDataType(DataType.Xml));
+sdk.Hash(rawXml, SendOptions.ForDataType(DataType.Xml));
 ```
 
-If neither the call nor the config supplies a data type, `ConfigException` is thrown.
+`HashFor()` and `LeavesFor()` look at the event type's `hashing.dataType` first. If no data type is found anywhere, `ConfigException` is thrown.
 
 ### 4.2 Request timeout
 
-`TimeoutMs` caps how long a single HTTP request to the Indexer (or the RPC node) may take, in milliseconds. It defaults to **10 000 ms (10 s)** and covers the whole request — connecting, sending, and reading the full response.
+`TimeoutMs` caps how long a single HTTP request to the Indexer may take, in milliseconds. It defaults to **10 000 ms (10 s)** and covers the whole request: connecting, sending, and reading the full response. A Merkle event type such as tickets `batch` answers only once its transaction is confirmed on chain, so give it a much longer timeout.
 
 ```csharp
-// For one call only — e.g. a large batch that deserves more headroom.
-await sdk.SendBatchAsync(records, SendOptions.ForTimeoutMs(30000));
-await sdk.SendAsync(rawXml, signingTime, SendOptions.ForDataType(DataType.Xml).WithTimeoutMs(3000));
+// For one call only.
+await sdk.AnchorAsync(Tickets.Batch, fields, SendOptions.ForTimeoutMs(120_000));
 ```
 
 A per-call `TimeoutMs` wins over the config one; a call that supplies none keeps the config default. A value of `0` or less throws `ConfigException` when the `SendOptions` is built. Exceeding the timeout surfaces as `TransportException`. Cancelling through your own `CancellationToken` surfaces as `OperationCanceledException` instead, as usual in .NET.
 
-### 4.3 RPC URL
-
-`RpcUrl` is the JSON-RPC endpoint of a chain node you trust. It is used **only** by `VerifyAsync()` (see [§8](#8-verifying-an-anchor-against-the-chain)).
+### 4.3 `SendOptions` is immutable
 
 ```csharp
-var options = SendOptions.ForDataType(DataType.Json).WithRpcUrl("https://rpc.example.com");
-
-// For one call only.
-await sdk.VerifyAsync(hash, txHash, TracingSdk.ModeTransactionHash, SendOptions.ForRpcUrl("https://other-rpc.example.com"));
-```
-
-A per-call `RpcUrl` wins over the config one. Calling `VerifyAsync()` with neither throws `ConfigException`; a blank string throws when the `SendOptions` is built.
-
-### 4.4 `SendOptions` is immutable
-
-```csharp
-var json = new SendOptions(DataType.Json);               // same as SendOptions.ForDataType(DataType.Json)
-var xml  = json.WithDataType(DataType.Xml);               // returns a copy; json is unchanged
-var fast = json.WithTimeoutMs(2000);                      // likewise
-var node = json.WithRpcUrl("https://rpc.example.com");    // likewise
+var json = new SendOptions(DataType.Json);   // same as SendOptions.ForDataType(DataType.Json)
+var xml  = json.WithDataType(DataType.Xml);  // returns a copy; json is unchanged
+var slow = json.WithTimeoutMs(60_000);       // likewise
 ```
 
 ---
@@ -208,20 +164,25 @@ All SDK exceptions derive from `TracingSdkException`, so a single `catch` can co
 
 | Exception | Thrown when |
 | --- | --- |
-| `ConfigException` | Missing/invalid config, an unsupported verify mode, a `TimeoutMs` of `0` or less, a blank `RpcUrl` or none at all when verifying, a `null` `signingTime`, an incomplete batch record, an empty `hash`, a `dataHash`/`proof` that is not 32 bytes (given as `byte[]` or as a hex string), or an mTLS file that cannot be loaded. |
+| `ConfigException` | Missing/invalid config, an inconsistent event type, an unknown event type, a request field that is unknown, missing or invalid for its type, a `TimeoutMs` of `0` or less, no data type to hash with, a link that cannot be built, or an mTLS file that cannot be loaded. |
 | `CanonicalizationException` | The raw data cannot be canonicalized for the chosen data type (e.g. malformed JSON/XML), or a string holds an unpaired surrogate. |
-| `TransportException` | The HTTP request failed (network, or it exceeded `TimeoutMs`), the Indexer answered with a non-2xx status, or the RPC node rejected the call / does not know the proof transaction. |
+| `TransportException` | The HTTP request failed: network, or it exceeded `TimeoutMs`. |
+| `IndexerException` | A `TransportException` for a non-2xx Indexer answer. It carries `StatusCode`, `Body`, and the `ErrorCode`, `Field`, `Index`, `ServerMessage` and `BatchId` of its `{ "error": … }` body, so you can branch on e.g. `CONFIRMATION_TIMEOUT`. |
 
-`ConfigException` and `CanonicalizationException` are thrown **before** anything leaves the process, so a rejected call never half-sends a batch. The underlying exception, when there is one, is the `InnerException`.
+`ConfigException` and `CanonicalizationException` are thrown **before** anything leaves the process, so a refused request is never sent. The underlying exception, when there is one, is the `InnerException`.
 
 ```csharp
 try
 {
-    await sdk.SendAsync(rawData, signingTime);
+    await sdk.AnchorAsync(eventType, fields);
 }
 catch (Exception e) when (e is ConfigException or CanonicalizationException)
 {
     // Bad input — retrying the same payload will not help.
+}
+catch (IndexerException e) when (e.StatusCode is 400 or 409 or 422)
+{
+    // The Indexer refused the request; e.ErrorCode says why.
 }
 catch (TransportException)
 {
@@ -229,156 +190,301 @@ catch (TransportException)
 }
 ```
 
-The SDK does not retry on your behalf. Because hashing is deterministic and a send is a plain POST, retrying with the same payload re-sends the same hash — a retry policy such as Polly's works as usual.
+The SDK does not retry on your behalf. Because hashing is deterministic, retrying with the same payload re-sends the same hash, and a retried tickets `batch` answers the same tree. A retry policy such as Polly's works as usual.
 
 ---
 
-## 7. Querying an anchor by hash
+## 7. Event types (tickets and other schemas)
 
-`QueryByHashAsync()` resolves a record's hash to the on-chain proofs that anchored it, via `GET {endpoint}/api/anchors?hash=<hash>`. The hash is URL-encoded for you, and the configured auth is applied exactly as it is for sending.
+The Indexer runs **event types** declared by backend plugins; the default `anchor` type is one of them. Each type has its own request fields. The tickets plugin is one such plugin, covered in [`TICKETS-INTEGRATION.md`](../../docs/TICKETS-INTEGRATION.md): `batch`, `lock`, `lockts`, `events`, `recon` and `subagent`. The SDK does not hard-code any of them. It reads a **definition** of each type and uses it to:
 
-```csharp
-var anchor = await sdk.QueryByHashAsync(hash);  // the byte[] from Hash()/SendAsync(), or a "0x…" string
-// anchor.Hash and each anchor.Proof entry are byte[]; anchor.ProofType == "transactionHash"
+- validate and send a record: `AnchorAsync()` → `POST {endpoint}/api/anchors?eventType=<name>`;
+- hash a record the way the type expects: `HashFor()` and `LeavesFor()`;
+- build a **verification link** to the integrity portal: `VerificationLink()` and `VerificationLinks()`. Looking a record up and checking it against the chain happens in the portal, not in the SDK.
 
-foreach (var proof in anchor.Proof)
+A schema that differs, or a plugin the SDK has never seen, needs only a new definition and no SDK change.
+
+### 7.1 Defining event types
+
+A definition mirrors an `eventTypes` entry of the backend's `plugin.yaml`. Event types are the only part of the configuration that comes from files; endpoint, auth, options and portal are set in code (§2). Load definitions from a JSON file:
+
+```json
 {
-    Console.WriteLine(Keccak256Hasher.ToHex(proof)); // 0x9f42…
+  "plugin": "tickets",
+  "eventTypes": [
+    {
+      "name": "batch",
+      "anchoring": { "mode": "merkle", "merkle": { "params": { "maxTreeSize": 100000 } } },
+      "request": {
+        "fields": [
+          { "name": "draw",         "type": "string",    "required": true },
+          { "name": "channel",      "type": "string",    "required": true },
+          { "name": "sequence",     "type": "uint64",    "required": true, "role": "sequence" },
+          { "name": "ticketHashes", "type": "bytes32[]", "required": true, "role": "leaves" },
+          { "name": "value",        "type": "uint64",    "required": true }
+        ]
+      },
+      "hashing": { "leafPrefix": "0x00" },
+      "link": { "fields": ["draw", "channel", "sequence"], "leafParam": "ticketHash" }
+    },
+    {
+      "name": "lock",
+      "anchoring": { "mode": "transactionHash", "key": "derived" },
+      "request": { "fields": [ { "name": "draw", "type": "string", "required": true } ] }
+    }
+  ]
 }
 ```
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `Hash` | `byte[]` | The record hash queried, as echoed back by the Indexer. |
-| `Proof` | `IReadOnlyList<byte[]>` | Every on-chain proof the record was anchored by — with `ProofType == "transactionHash"`, the 32-byte transaction hashes. A record can be anchored more than once, so always iterate. |
-| `ProofType` | `string` | How each entry in `Proof` should be resolved on chain. Pass it straight to `VerifyAsync()` as its `mode`. Defaults to `"transactionHash"` if an older Indexer omits the field. |
-
-The Indexer answers in hex; the SDK decodes it, accepting it with or without `0x` and in either case.
-
-Errors: `ConfigException` for an empty `hash`; `TransportException` for a failed request, a non-2xx status (including the `404` for a hash that was never anchored), or a body that is not a `{ hash, proof }` object whose values are hex strings.
-
----
-
-## 8. Verifying an anchor against the chain
-
-`QueryByHashAsync()` tells you what the Indexer says. `VerifyAsync()` checks that claim against the chain itself, over an RPC endpoint **you** choose — so a compromised or mistaken Indexer cannot vouch for itself.
-
-```csharp
-var hash = sdk.Hash(rawData);                 // or the hash returned by SendAsync()
-var anchor = await sdk.QueryByHashAsync(hash);
-
-// Pass the whole query result: ProofType tells VerifyAsync how to read Proof,
-// so the same call works for every proof kind.
-if (await sdk.VerifyAsync(anchor.Hash, anchor.Proof, anchor.ProofType))
-{
-    Console.WriteLine("anchored on chain");
-}
-```
-
-The proof kinds (`QueryResult.ProofType`, and the `mode` argument):
-
-| Mode | `Proof` holds | Verified when |
-| --- | --- | --- |
-| `TracingSdk.ModeTransactionHash` (`"transactionHash"`) | One or more transaction hashes. | One of the transactions has an `Anchored` event carrying the record hash itself. They are checked in order, stopping at the first match. |
-| `TracingSdk.ModeMerkleProof` (`"merkleProof"`) | One Merkle proof: the transaction hash first, then the record's sibling hashes from leaf to root. | The siblings fold the record hash into a Merkle root, and the transaction has an `Anchored` event carrying that root. |
-
-To check a single transaction yourself, pass one proof element: `VerifyAsync(anchor.Hash, anchor.Proof[0], anchor.ProofType)`. In Merkle mode, one element on its own is a one-leaf tree, whose root is the record hash itself.
-
-What it does:
-
-1. Calls `eth_getTransactionReceipt` with the proof transaction hash on the configured `RpcUrl` — a plain JSON-RPC 2.0 POST, with no Indexer auth attached.
-2. Walks the receipt's logs and keeps the ones whose `topics[0]` equals `keccak256("Anchored(bytes32,uint64)")`.
-3. ABI-decodes each of those as `Anchored(bytes32, uint64 signingTime)`. The `bytes32` is the record hash, or in Merkle mode the Merkle root.
-4. Returns `true` as soon as one decoded `bytes32` equals the expected value, `false` if none does.
-
-Both event layouts decode: an indexed `bytes32` is read from `topics[1]`, a non-indexed one from the log data. Comparison is on normalized hashes, so case and a missing `0x` prefix do not matter.
-
-### Merkle proofs
-
-Merkle trees use Keccak-256 with sorted pairs, the layout of OpenZeppelin's `MerkleProof.verify` (and of merkletreejs with `sortPairs: true`):
-
-- **Leaf:** the record hash itself, as returned by `Hash()`. It is not hashed again.
-- **Parent:** `keccak256(a ‖ b)`, with the two 32-byte nodes in ascending byte order. Proofs therefore carry no left/right flags, but siblings must still be ordered from the leaf up to the root.
-- **Odd node out:** promoted to the next level unchanged.
-
-`MerkleProof.ComputeRoot(leaf, siblings)` (namespace `Tracing.Sdk.Verify`) exposes the root calculation on its own. `testdata/merkle.json` holds the shared test vectors, computed by merkletreejs.
-
-| Outcome | Meaning |
+| Member | Meaning |
 | --- | --- |
-| `true` | The transaction really does contain an `Anchored` event carrying this data hash (or, in Merkle mode, the root its proof leads to). |
-| `false` | The transaction exists, but no `Anchored` event in it carries the expected value — for a Merkle proof, also when a sibling is wrong or out of order. |
-| `ConfigException` | A `dataHash` or proof element that is not 32 bytes, an empty proof, an unsupported `mode`, or no `RpcUrl` anywhere. |
-| `TransportException` | The RPC endpoint was unreachable, returned a non-2xx status or a JSON-RPC error, or does not know the transaction (unmined, dropped, or wrong-chain hash). |
+| `name` | The `eventType` query value. |
+| `anchoring.mode` | `transactionHash` (one log per request, the default) or `merkle` (the request carries leaves, and the backend builds a tree and anchors its root). |
+| `anchoring.key` | `client` (the default) or `derived`. With `derived`, the backend computes the key (e.g. the tickets drawRoot) and answers it as `key`. |
+| `anchoring.merkle.params.maxTreeSize` | The most leaves one request may carry, checked before sending. |
+| `request.fields[]` | Every field the body may hold. `type` is `string`, `bytes32`, `bytes`, `uint64` or `bytes32[]`. `required` defaults to `false`. |
+| `role` | `key`: the bytes32 the log is keyed by. `leaves`: the bytes32[] of a `merkle` type. `sequence` (SDK only): the uint64 that numbers the first leaf, so leaf *k* is number `sequence + k` in its link. |
+| `hashing` (SDK only) | `dataType` (`json`, `xml` or `raw`) and `leafPrefix` (one hex byte, `merkle` only, default `0x00`). See [§7.3](#73-hashing-records). |
+| `link` (SDK only) | `fields`: the request fields a link carries, in order. The default is every required `string`, `bytes32` or `uint64` field except the leaves. `leafParam` (default `ticketHash`) and `keyParam` (default `key`) name the leaf and derived-key parameters. |
 
-A `false` is a real answer about a real transaction; a missing transaction is an exception, because "the node has never heard of it" says nothing about whether the record was anchored.
+`response`, `chain` and any other member the SDK does not use are ignored, so you can convert a `plugin.yaml` to JSON and use it as it is. Comments and trailing commas are allowed.
+
+The definitions are checked when they are registered. Each of these throws `ConfigException`:
+- a field declared twice, or an unknown type or role;
+- a `key` field that is not `bytes32`, or a `merkle` type without a `leaves` field;
+- a derived key that is also a request field;
+- a link field that does not exist or is not a scalar;
+- a leaf prefix of `0x01` or `0x02`, which are reserved for inner nodes and roots.
+
+Register the definitions with the SDK through `TracingSdkConfig.EventTypes`:
+
+```csharp
+using Tracing.Sdk.Events;
+
+using var sdk = new TracingSdk(new TracingSdkConfig
+{
+    Endpoint = "https://indexer.example.com",
+    Auth = AuthConfig.ApiToken("your-api-token"),
+    Options = new SendOptions(DataType.Json, 60_000),
+    EventTypes = EventTypeRegistry.FromJsonFile("tickets-events.json"),
+    // or in code, from the shipped presets:
+    // EventTypes = EventTypeRegistry.Default().Register(EventPresets.Tickets),
+});
+```
+
+- `EventPresets.Anchor` and `EventPresets.Tickets` are the backend's built-in types as C# definitions. [`examples/…/config/tickets-events.json`](../examples/Tracing.Sdk.Examples/config/tickets-events.json) is the same tickets set as JSON; a test keeps the two identical.
+- Without `EventTypes`, only `anchor` is registered.
+- The SDK copies the registry when it is constructed, so registering more types later does not affect it.
+- A definition is a plain `record` (`EventTypeDefinition`, `FieldDefinition`, ...), so you can also build one in code, or derive one from a preset with `with { ... }`.
+
+### 7.2 Anchoring a record — `AnchorAsync()`
+
+```csharp
+var result = await sdk.AnchorAsync(Tickets.Batch, new Dictionary<string, object?>
+{
+    ["draw"] = "draw-1",
+    ["channel"] = "channel-1",
+    ["sequence"] = 0UL,
+    ["ticketHashes"] = sdk.LeavesFor(Tickets.Batch, ticketsAsJson), // see §7.3
+    ["value"] = 30_000UL,
+});
+
+result.TryGetUInt64("batchId", out var batchId);
+result.TryGetString("batchRoot", out var batchRoot);
+Console.WriteLine($"{result.StatusCode} {result.AnchorId} batch {batchId} root {batchRoot}");
+```
+
+The fields are validated against the definition **before** anything is sent:
+- An undeclared field is refused, and so is a missing required one.
+- `bytes32` takes 64 hex digits (`0x` optional) or a 32-byte `byte[]`. It must not be all zeros, and it is sent as lowercase `0x` hex.
+- `bytes` takes `0x` hex or a `byte[]`.
+- `uint64` takes any non-negative integer type or a `BigInteger`, and is written as an exact JSON integer, also above 2^53.
+- `bytes32[]` takes any list of bytes32 values, holding 1 to `maxTreeSize` of them with no repeats.
+
+A `JsonObject` overload takes the body as JSON instead.
+
+`AnchorResult` keeps the answer as is:
+
+| Member | |
+| --- | --- |
+| `StatusCode` | `200` for a `merkle` type, which answers once the tree is confirmed on chain. `202` for a submitted direct anchor. |
+| `AnchorId` | Names the anchor. Its webhook repeats it as `data.anchorId`. |
+| `Key` | The derived key (the drawRoot of `lock` / `lockts`), or `null`. |
+| `TryGetString(name)`, `TryGetUInt64(name)` | Any other member: `batchId`, `batchRoot`, `ticketRoot`, `txHash`, `blockchainStatus`, ... |
+| `Json`, `Body`, `RequestBody` | The parsed answer, the raw answer, and the body exactly as sent. |
+
+The SDK builds no tree and derives no key: roots, keys and ids come only from the Indexer. `AnchorAsync()` sends one record per call; the `/api/anchors/batch` route is not used for event types.
+
+A `merkle` type answers only once its transaction is confirmed, so give those calls a long `TimeoutMs` (the examples use 60 s). When the Indexer refuses a request, `AnchorAsync()` throws `IndexerException`, whose `ErrorCode` says why:
+
+```csharp
+try
+{
+    result = await sdk.AnchorAsync(Tickets.Batch, fields);
+}
+catch (IndexerException e) when (e.ErrorCode == "CONFIRMATION_TIMEOUT")
+{
+    // The batch is stored and still anchoring: send the same request again.
+    // The retry answers the same tree and anchors nothing twice.
+}
+catch (IndexerException e) when (e.ErrorCode == "DRAW_HAS_NO_BATCH")
+{
+    // A lock before any batch of the draw was confirmed.
+}
+```
+
+### 7.3 Hashing records
+
+The backend never hashes a record. Every bytes32 you send (a record hash, a ticket hash) is yours, and whoever checks the record later must hash it the same way. Two helpers follow the event type's definition:
+
+```csharp
+// Direct type: keccak256(canonical bytes).
+byte[] hash = sdk.HashFor(Tickets.Events, payoutsJson);
+
+// Merkle type: keccak256(leafPrefix || canonical bytes), one per leaf, in order.
+IReadOnlyList<byte[]> leaves = sdk.LeavesFor(Tickets.Batch, ticketsAsJson);
+```
+
+The data type is the event type's `hashing.dataType`, then the per-call `SendOptions.DataType`, then the config's. The leaf prefix is `hashing.leafPrefix`, by default `0x00`, so that a leaf can never be mistaken for an inner node (`0x01`) or a batch root (`0x02`).
+
+The same hashes are available without an SDK instance, in `Tracing.Sdk.Hash.Hashes`:
+
+| Helper | Returns |
+| --- | --- |
+| `Hashes.Record(rawData, dataType)` | keccak256 of the canonical bytes. This is the same as `sdk.Hash()`. |
+| `Hashes.Leaf(rawData, dataType, prefix = 0x00)` | keccak256(prefix ‖ canonical bytes). `0x01` and `0x02` are refused. |
+| `Hashes.Leaves(rawData[], dataType, prefix = 0x00)` | `Leaf` of each item, in order. |
+| `Hashes.DrawHash(draw)` | keccak256(utf8(draw)): the `drawHash` topic of the `events` / `recon` logs. |
+| `Hashes.LockTimestampImprint(drawRoot)` | SHA-256 over the 32 raw bytes of a drawRoot: the imprint a timestamp authority must sign for `lockts`. |
+
+Every helper returns the raw 32-byte digest; `Keccak256Hasher.ToHex()` gives the `0x` form.
+
+### 7.4 Verification links
+
+Verification happens in the integrity portal. The portal looks a record up by the fields in its link, checks it against the chain in the browser, and shows the result. The SDK only builds the link, without any network call:
+
+```
+https://integrity.vmatrix.com/v1/?type=<eventType>&<field>=<value>&…[#ticketId=<base64url>]
+```
+
+```csharp
+// Direct types: the link fields of the request, plus the derived key if any.
+string lockLink = sdk.VerificationLink(lockResult);
+// https://integrity.vmatrix.com/v1/?type=lock&draw=draw-1&key=0xefa5…6f41
+
+// Merkle types: one link per leaf, with that leaf's own number and hash,
+// and your ticket id after '#'.
+IReadOnlyList<string> ticketLinks = sdk.VerificationLinks(batchResult, k => tickets[k].Id);
+// https://integrity.vmatrix.com/v1/?type=batch&draw=draw-1&channel=channel-1&sequence=3&ticketHash=0x76d4…95f5#ticketId=VC1kcmF3LTEtMDAwMDAz
+
+// From values you kept, without an AnchorResult.
+string link = sdk.VerificationLink(Tickets.Batch, new Dictionary<string, object?>
+{
+    ["draw"] = "draw-1", ["channel"] = "channel-1", ["sequence"] = 3UL, ["ticketHash"] = leaf,
+}, ticketId: "T-draw-1-000003");
+```
+
+| Event type | Link carries |
+| --- | --- |
+| `batch` | `draw`, `channel`, `sequence` (the ticket's own number), `ticketHash`, `#ticketId` |
+| `lock`, `lockts` | `draw`, `key` (the drawRoot). The `lockts` token is `bytes` and never goes in a link. |
+| `events`, `recon` | `hash`, `draw` |
+| `subagent` | `hash` |
+
+- **`ticketId`** is your own id of one leaf (a ticket), opaque to the portal. It is UTF-8 encoded, base64url-encoded, and placed after `#`, so the browser never sends it to a server. It applies only to the leaves of a `merkle` type. Passing one for another type throws `ConfigException`.
+- **Values** are written in their normalized form, so a link built from kept fields matches the one built from the answer. bytes32 is lowercase `0x` hex, uint64 is decimal, and every value is URL-encoded.
+- **Portal config** (`TracingSdkConfig.Portal`, e.g. `new PortalConfig { BaseUrl = "…" }`) is optional. `BaseUrl` defaults to `https://integrity.vmatrix.com/v1/`; a base URL with its own query is extended with `&`, and a fragment is refused. `ParamNames` renames the `type` and `ticketId` parameters. A field named like one of them throws `ConfigException` when the link is built.
+
+### 7.5 The life of a draw, in code
+
+This follows [`TICKETS-INTEGRATION.md`](../../docs/TICKETS-INTEGRATION.md):
+
+```csharp
+// 1. Sell: one batch at a time; next sequence = previous sequence + previous count.
+var batch = await sdk.AnchorAsync(Tickets.Batch, new Dictionary<string, object?>
+{
+    ["draw"] = draw, ["channel"] = channel, ["sequence"] = sequence,
+    ["ticketHashes"] = sdk.LeavesFor(Tickets.Batch, tickets), ["value"] = total,
+});
+var links = sdk.VerificationLinks(batch, k => ticketIds[k]);
+
+// 2. Lock, once the last batch has answered 200. The backend derives the drawRoot.
+var locked = await sdk.AnchorAsync(Tickets.Lock, new Dictionary<string, object?> { ["draw"] = draw });
+byte[] imprint = Hashes.LockTimestampImprint(locked.Key!); // have a TSA sign this
+
+// 3. Timestamp: the TSA's DER answer goes on chain whole.
+await sdk.AnchorAsync(Tickets.LockTs, new Dictionary<string, object?> { ["draw"] = draw, ["signature"] = tsaResponseDer });
+
+// 4. Records, whenever they exist.
+await sdk.AnchorAsync(Tickets.Events, new Dictionary<string, object?> { ["hash"] = sdk.HashFor(Tickets.Events, payouts), ["draw"] = draw });
+await sdk.AnchorAsync(Tickets.Recon, new Dictionary<string, object?> { ["hash"] = sdk.HashFor(Tickets.Recon, reconciliation), ["draw"] = draw });
+await sdk.AnchorAsync(Tickets.Subagent, new Dictionary<string, object?> { ["hash"] = sdk.HashFor(Tickets.Subagent, subagentList) });
+```
+
+The runnable versions are the `tickets-batch`, `tickets-lock` and `tickets-records` examples ([§8](#8-runnable-examples)). [`config/custom-events.example.json`](../examples/Tracing.Sdk.Examples/config/custom-events.example.json) and the `custom` example show the same calls for a schema the SDK does not ship.
 
 ---
 
-## 9. Runnable examples
+## 8. Runnable examples
 
 [`examples/Tracing.Sdk.Examples`](../examples/Tracing.Sdk.Examples/) holds one example per file:
 
 | Name | File | Shows |
 | --- | --- | --- |
-| `single` | [`SingleSendExample.cs`](../examples/Tracing.Sdk.Examples/SingleSendExample.cs) | One JSON record with `SendAsync()` |
-| `batch` | [`BatchExample.cs`](../examples/Tracing.Sdk.Examples/BatchExample.cs) | Several JSON records in one request with `SendBatchAsync()` |
-| `xml` | [`XmlExample.cs`](../examples/Tracing.Sdk.Examples/XmlExample.cs) | The batch flow with `DataType.Xml` |
-| `query` | [`QueryExample.cs`](../examples/Tracing.Sdk.Examples/QueryExample.cs) | Sending a record, then looking the anchor up with `QueryByHashAsync()` |
-| `verify` | [`VerifyExample.cs`](../examples/Tracing.Sdk.Examples/VerifyExample.cs) | Query, then `VerifyAsync()` each proof transaction against an RPC node |
+| `tickets-batch` | [`TicketsBatchExample.cs`](../examples/Tracing.Sdk.Examples/TicketsBatchExample.cs) | Hash tickets with `LeavesFor()`, anchor two consecutive `batch` requests (retrying `CONFIRMATION_TIMEOUT`), print one portal link per ticket |
+| `tickets-lock` | [`TicketsLockExample.cs`](../examples/Tracing.Sdk.Examples/TicketsLockExample.cs) | `lock` a draw, print the TSA imprint, anchor the TSA token (`resp.tsr`, or `TSA_RESPONSE`) with `lockts` |
+| `tickets-records` | [`TicketsRecordsExample.cs`](../examples/Tracing.Sdk.Examples/TicketsRecordsExample.cs) | Hash and anchor `events`, `recon` and `subagent` records, print their links |
+| `custom` | [`CustomEventExample.cs`](../examples/Tracing.Sdk.Examples/CustomEventExample.cs) | A `shipment` type from [`custom-events.example.json`](../examples/Tracing.Sdk.Examples/config/custom-events.example.json) |
 
-Set the endpoint, token (and RPC URL for `verify`) in [`ExampleSettings.cs`](../examples/Tracing.Sdk.Examples/ExampleSettings.cs), then run an example by name:
+Set the endpoint and token in [`ExampleSettings.cs`](../examples/Tracing.Sdk.Examples/ExampleSettings.cs); the `TRACING_API_KEY` environment variable replaces the token, so the key never has to be written into the code. The event types come from the JSON files in [`config/`](../examples/Tracing.Sdk.Examples/config/). Then run an example by name:
 
 ```bash
-dotnet run --project examples/Tracing.Sdk.Examples -- single
+TRACING_API_KEY=<your key> dotnet run --project examples/Tracing.Sdk.Examples -- tickets-batch
 ```
 
 ---
 
-## 10. API reference
+## 9. API reference
 
 ```csharp
 new TracingSdk(TracingSdkConfig config)
 
-Task<SendResult> SendAsync(string | byte[] rawData, object signingTime, SendOptions? options = null, CancellationToken ct = default)
-    // SendResult(byte[] Hash, IndexerResponse Response)
-    // IndexerResponse(int StatusCode, string Body, JsonElement? Json, int RecordCount)
+Task<AnchorResult> AnchorAsync(string eventType, IReadOnlyDictionary<string, object?> | JsonObject fields,
+                               SendOptions? options = null, CancellationToken ct = default)
+    // AnchorResult: EventType, StatusCode, AnchorId, Key, Json, Body, RequestBody, TryGetString(name), TryGetUInt64(name)
 
-Task<IReadOnlyList<SendResult>> SendBatchAsync(IEnumerable<BatchRecord> records, SendOptions? options = null, CancellationToken ct = default)
+byte[] Hash(string | byte[] rawData, SendOptions? options = null)       // 32-byte Keccak-256 digest
+byte[] HashFor(string eventType, string | byte[] rawData, SendOptions? options = null)
+IReadOnlyList<byte[]> LeavesFor(string eventType, IEnumerable<string> | IEnumerable<byte[]> rawData, SendOptions? options = null)
 
-byte[] Hash(string | byte[] rawData, SendOptions? options = null)          // 32-byte Keccak-256 digest
+string VerificationLink(AnchorResult result)                                                  // direct types
+IReadOnlyList<string> VerificationLinks(AnchorResult result, Func<int, string?>? ticketIdFor = null)  // merkle types, one per leaf
+string VerificationLink(string eventType, IReadOnlyDictionary<string, object?> fields, string? ticketId = null)
 
-Task<QueryResult> QueryByHashAsync(byte[] | string hash, SendOptions? options = null, CancellationToken ct = default)
-    // QueryResult(byte[] Hash, IReadOnlyList<byte[]> Proof, string ProofType)
+static EventTypeRegistry EventTypeRegistry.FromJson(string json) / FromJsonFile(path) / Default()
+EventTypeRegistry.Register(EventTypeDefinition | IEnumerable<EventTypeDefinition>)
+EventPresets.Anchor / EventPresets.Tickets      // Tickets.Batch, .Lock, .LockTs, .Events, .Recon, .Subagent: the names
 
-Task<bool> VerifyAsync(byte[] dataHash, IReadOnlyList<byte[]> proof, string mode,
-                       SendOptions? options = null, CancellationToken ct = default)
-    // the whole query result: VerifyAsync(anchor.Hash, anchor.Proof, anchor.ProofType)
-Task<bool> VerifyAsync(byte[] dataHash, byte[] proof, string mode = TracingSdk.ModeTransactionHash,
-                       SendOptions? options = null, CancellationToken ct = default)
-    // one proof element
-Task<bool> VerifyAsync(string dataHash, IReadOnlyList<string> | string proof, ...)   // same, with 0x-hex strings
-
-static byte[] MerkleProof.ComputeRoot(byte[] leaf, IEnumerable<byte[]> siblings)   // sorted-pair Keccak-256 root
+static byte[] Hashes.Record(rawData, DataType) / Leaf(rawData, DataType, byte prefix = 0x00) / DrawHash(string draw)
+static IReadOnlyList<byte[]> Hashes.Leaves(rawData[], DataType, byte prefix = 0x00)
+static byte[] Hashes.LockTimestampImprint(string | byte[] drawRoot)
 static string Keccak256Hasher.ToHex(byte[] bytes)             // "0x…" lowercase hex, for display or storage
-
-TracingSdk.ModeTransactionHash   // "transactionHash": proofs are transactions anchoring the record hash
-TracingSdk.ModeMerkleProof       // "merkleProof": proof is [txHash, siblings…]; the transaction anchors the root
 ```
 
 `SendOptions`:
 
 ```csharp
-new SendOptions(DataType? dataType = null, int? timeoutMs = null, string? rpcUrl = null)
-SendOptions.ForDataType(DataType) / ForTimeoutMs(int) / ForRpcUrl(string)
-options.DataType / options.TimeoutMs / options.RpcUrl
-options.WithDataType(...) / WithTimeoutMs(...) / WithRpcUrl(...)   // return a copy
+new SendOptions(DataType? dataType = null, int? timeoutMs = null)
+SendOptions.ForDataType(DataType) / ForTimeoutMs(int)
+options.DataType / options.TimeoutMs
+options.WithDataType(...) / WithTimeoutMs(...)   // return a copy
 ```
 
-Indexer endpoints used: `POST /api/anchors`, `POST /api/anchors/batch`, `GET /api/anchors?hash=…`. `VerifyAsync()` additionally calls `eth_getTransactionReceipt` on `RpcUrl`.
+The only Indexer endpoint used is `POST /api/anchors?eventType=…`.
 
 ---
 
-## 11. Differences from the PHP SDK
+## 10. Hashes across SDKs
 
 The same record produces the same hash in the PHP, JavaScript and .NET SDKs. This is verified against the shared `testdata/` vectors and by differential testing against the PHP SDK. Known exceptions:
 

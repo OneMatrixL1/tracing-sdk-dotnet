@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Tracing.Sdk.Rpc;
 using Tracing.Sdk.Transport;
 
 namespace Tracing.Sdk.Tests;
@@ -42,15 +41,6 @@ public sealed class FixtureCase(JsonElement element)
 
     public string? ForbiddenSubstring => String("forbiddenSubstring");
 
-    // merkle.json cases.
-    public string Leaf => String("leaf")!;
-
-    public IReadOnlyList<string> Proof => element.GetProperty("proof").EnumerateArray().Select(p => p.GetString()!).ToList();
-
-    public string Root => String("root")!;
-
-    public bool Valid => Flag("valid");
-
     public override string ToString() => Id;
 
     private bool Flag(string name) => element.TryGetProperty(name, out var value) && value.GetBoolean();
@@ -60,21 +50,8 @@ public sealed class FixtureCase(JsonElement element)
 
 internal sealed class FakeTransport : IIndexerTransport
 {
-    /// <summary>The two transaction-hash proofs a query answers with by default.</summary>
-    public static readonly string ProofA = "0x" + string.Concat(Enumerable.Repeat("ab", 32));
-
-    public static readonly string ProofB = "0x" + string.Concat(Enumerable.Repeat("cd", 32));
-
-    public List<AnchorEntry> SingleCalls { get; } = [];
-
-    public List<IReadOnlyList<AnchorEntry>> BatchCalls { get; } = [];
-
-    public List<string> QueryCalls { get; } = [];
-
     /// <summary>Timeout passed to each call, in call order.</summary>
     public List<int?> TimeoutCalls { get; } = [];
-
-    public HttpAnswer? QueryResponse { get; set; }
 
     /// <summary>Every event-type POST: its eventType and body as sent.</summary>
     public List<(string EventType, string Body)> EventCalls { get; } = [];
@@ -86,33 +63,6 @@ internal sealed class FakeTransport : IIndexerTransport
     public static readonly string DrawRoot = "0x" + string.Concat(Enumerable.Repeat("d7", 32));
 
     public bool Throw { get; set; }
-
-    public Task<IndexerResponse> SendSingleAsync(AnchorEntry entry, int? timeoutMs, CancellationToken cancellationToken)
-    {
-        MaybeThrow();
-        SingleCalls.Add(entry);
-        TimeoutCalls.Add(timeoutMs);
-
-        return Task.FromResult(new IndexerResponse(200, "", null, 1));
-    }
-
-    public Task<IndexerResponse> SendBatchAsync(IReadOnlyList<AnchorEntry> entries, int? timeoutMs, CancellationToken cancellationToken)
-    {
-        MaybeThrow();
-        BatchCalls.Add(entries);
-        TimeoutCalls.Add(timeoutMs);
-
-        return Task.FromResult(new IndexerResponse(200, "", null, entries.Count));
-    }
-
-    public Task<HttpAnswer> QueryByHashAsync(string hash, int? timeoutMs, CancellationToken cancellationToken)
-    {
-        MaybeThrow();
-        QueryCalls.Add(hash);
-        TimeoutCalls.Add(timeoutMs);
-
-        return Task.FromResult(QueryResponse ?? Answer(200, $$"""{"hash":"{{hash}}","proof":["{{ProofA}}","{{ProofB}}"],"proofType":"transactionHash"}"""));
-    }
 
     public Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken)
     {
@@ -153,31 +103,5 @@ internal sealed class FakeTransport : IIndexerTransport
         {
             throw new TransportException("boom");
         }
-    }
-}
-
-internal sealed class FakeRpcTransport : IRpcTransport
-{
-    public List<(string RpcUrl, string TxHash, int? TimeoutMs)> Calls { get; } = [];
-
-    /// <summary>The receipt JSON to answer with; null means "transaction unknown".</summary>
-    public string? Receipt { get; set; }
-
-    public bool Throw { get; set; }
-
-    public Task<JsonElement?> GetTransactionReceiptAsync(string rpcUrl, string txHash, int? timeoutMs, CancellationToken cancellationToken)
-    {
-        if (Throw)
-        {
-            throw new TransportException("boom");
-        }
-
-        Calls.Add((rpcUrl, txHash, timeoutMs));
-
-        return Task.FromResult(Receipt is null ? (JsonElement?)null : JsonDocument.Parse(Receipt).RootElement.Clone());
-    }
-
-    public void Dispose()
-    {
     }
 }

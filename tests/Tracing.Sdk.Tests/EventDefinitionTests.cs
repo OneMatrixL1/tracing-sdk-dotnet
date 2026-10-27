@@ -102,48 +102,17 @@ public class EventDefinitionTests
     }
 
     [Fact]
-    public void ConfigReadsFromJson()
-    {
-        var config = TracingSdkConfig.FromJson("""
-            {
-              // comments are allowed
-              "endpoint": "https://indexer.example.com",
-              "auth": { "type": "basic", "username": "u", "password": "p" },
-              "options": { "dataType": "xml", "timeoutMs": 60000 },
-              "portal": { "paramNames": { "ticketId": "id" } },
-              "eventTypes": [ { "name": "subagent", "request": { "fields": [ { "name": "hash", "type": "bytes32", "role": "key" } ] } } ]
-            }
-            """);
-
-        Assert.Equal("https://indexer.example.com", config.Endpoint);
-        Assert.Equal(AuthConfig.Basic("u", "p"), config.Auth);
-        Assert.Equal(DataType.Xml, config.Options!.DataType);
-        Assert.Equal(60000, config.Options.TimeoutMs);
-        Assert.Equal(PortalConfig.DefaultBaseUrl, config.Portal!.BaseUrl);
-        Assert.Equal(new PortalParamNames(TicketId: "id"), config.Portal.ParamNames);
-        Assert.Equal(["subagent"], config.EventTypes!.Names);
-    }
-
-    [Theory]
-    [InlineData("""{"auth":{"type":"apiToken","token":"t"}}""")]
-    [InlineData("""{"endpoint":"e","auth":{"type":"oauth"}}""")]
-    [InlineData("""{"endpoint":"e","auth":{"type":"apiToken"}}""")]
-    [InlineData("""{"endpoint":"e","auth":{"type":"apiToken","token":"t"},"options":{"dataType":"yaml"}}""")]
-    [InlineData("""{"endpoint":"e","auth":{"type":"apiToken","token":"t"},"portal":{"baseUrl":"ftp://x/"}}""")]
-    [InlineData("""not json""")]
-    public void BadConfigJsonIsAConfigError(string json)
-    {
-        Assert.Throws<ConfigException>(() => TracingSdkConfig.FromJson(json));
-    }
-
-    [Fact]
-    public void TheExampleConfigsLoad()
+    public void TheExampleEventFilesLoad()
     {
         var dir = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "examples", "Tracing.Sdk.Examples", "config");
 
-        using var tickets = new TracingSdk(TracingSdkConfig.FromJsonFile(
-            Path.Combine(dir, "tracing.example.json"), EventTypeRegistry.FromJsonFile(Path.Combine(dir, "tickets-events.json"))));
-        using var custom = new TracingSdk(TracingSdkConfig.FromJsonFile(
-            Path.Combine(dir, "tracing.example.json"), EventTypeRegistry.FromJsonFile(Path.Combine(dir, "custom-events.example.json"))));
+        Assert.Equal(6, EventTypeRegistry.FromJsonFile(Path.Combine(dir, "tickets-events.json")).Names.Count);
+        Assert.Equal(["shipment"], EventTypeRegistry.FromJsonFile(Path.Combine(dir, "custom-events.example.json")).Names);
+    }
+
+    [Fact]
+    public void AMissingEventFileIsAConfigError()
+    {
+        Assert.Throws<ConfigException>(() => EventTypeRegistry.FromJsonFile("/nonexistent/events.json"));
     }
 }

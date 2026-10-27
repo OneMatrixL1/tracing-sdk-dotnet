@@ -1,7 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Tracing.Sdk.Events;
-using Tracing.Sdk.Transport;
 
 namespace Tracing.Sdk.Tests;
 
@@ -119,33 +118,5 @@ public class TicketsFlowTests
         var e = await Assert.ThrowsAsync<IndexerException>(() => sdk.AnchorAsync(Tickets.LockTs, new Dictionary<string, object?> { ["draw"] = "d", ["signature"] = "0x30" }));
 
         Assert.Equal(409, e.StatusCode);
-    }
-}
-
-public class EventTransportTests(EchoServer server) : IClassFixture<EchoServer>
-{
-    [Fact]
-    public async Task PostEventPutsTheEventTypeInTheQuery()
-    {
-        using var transport = new IndexerTransport(server.BaseUrl, AuthConfig.ApiToken("token"), 10000);
-
-        var answer = await transport.PostEventAsync("lock ts", new JsonObject { ["draw"] = "d" }, null, default);
-        var echo = answer.Json!.Value;
-
-        Assert.Equal("/api/anchors?eventType=lock%20ts", echo.GetProperty("path").GetString());
-        Assert.Equal("POST", echo.GetProperty("method").GetString());
-        Assert.Equal("""{"draw":"d"}""", echo.GetProperty("body").GetRawText());
-    }
-
-    [Fact]
-    public async Task ANon2xxAnswerIsAnIndexerException()
-    {
-        using var transport = new IndexerTransport(server.BaseUrl + "/fail", AuthConfig.ApiToken("token"), 10000);
-
-        var e = await Assert.ThrowsAsync<IndexerException>(() => transport.PostEventAsync("lock", new JsonObject(), null, default));
-
-        Assert.Equal(500, e.StatusCode);
-        Assert.Null(e.ErrorCode);
-        Assert.Equal("Indexer returned HTTP 500: nope", e.Message);
     }
 }

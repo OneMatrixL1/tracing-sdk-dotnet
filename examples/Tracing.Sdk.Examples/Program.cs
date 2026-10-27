@@ -1,6 +1,5 @@
-// Runnable examples, one scenario per file. Set your endpoint and token (and
-// RPC URL for "verify") in ExampleSettings.cs; the tickets-* and custom
-// examples read config/tracing.example.json instead. Then run:
+// Runnable examples, one scenario per file. Set your endpoint and token in
+// ExampleSettings.cs (or the token in TRACING_API_KEY), then run:
 //
 //   dotnet run --project examples/Tracing.Sdk.Examples -- <example>
 using Tracing.Sdk;
@@ -8,13 +7,7 @@ using Tracing.Sdk.Examples;
 
 var examples = new Dictionary<string, Func<Task>>
 {
-    ["single"] = SingleSendExample.RunAsync, // SingleSendExample.cs
-    ["batch"] = BatchExample.RunAsync,       // BatchExample.cs
-    ["xml"] = XmlExample.RunAsync,           // XmlExample.cs
-    ["query"] = QueryExample.RunAsync,       // QueryExample.cs
-    ["verify"] = VerifyExample.RunAsync,     // VerifyExample.cs
-
-    // Event types: config/tracing.example.json + config/tickets-events.json.
+    // The tickets plugin: event types from config/tickets-events.json.
     ["tickets-batch"] = TicketsBatchExample.RunAsync,     // TicketsBatchExample.cs
     ["tickets-lock"] = TicketsLockExample.RunAsync,       // TicketsLockExample.cs
     ["tickets-records"] = TicketsRecordsExample.RunAsync, // TicketsRecordsExample.cs
@@ -34,8 +27,6 @@ try
 }
 catch (TracingSdkException e)
 {
-    // A TransportException from "verify" can also mean the transaction is not
-    // mined yet, or the RPC node does not have it — retry rather than conclude.
     Console.Error.WriteLine($"[error] {e.GetType().Name}: {e.Message}");
     return 1;
 }

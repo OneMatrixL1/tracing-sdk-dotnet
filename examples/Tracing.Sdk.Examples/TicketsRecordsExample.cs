@@ -38,7 +38,7 @@ internal static class TicketsRecordsExample
 
     private static async Task AnchorRecordAsync(TracingSdk sdk, string eventType, string record, string? draw)
     {
-        // Canonical JSON (dataType from config/tracing.example.json), then keccak256.
+        // Canonical JSON (the dataType in ExampleSettings.cs), then keccak256.
         var hash = sdk.HashFor(eventType, record);
 
         var fields = new Dictionary<string, object?> { ["hash"] = hash };
