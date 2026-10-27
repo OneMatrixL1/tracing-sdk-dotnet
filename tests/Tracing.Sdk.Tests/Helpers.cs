@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Tracing.Sdk.Rpc;
 using Tracing.Sdk.Transport;
 
@@ -75,6 +76,15 @@ internal sealed class FakeTransport : IIndexerTransport
 
     public HttpAnswer? QueryResponse { get; set; }
 
+    /// <summary>Every event-type POST: its eventType and body as sent.</summary>
+    public List<(string EventType, string Body)> EventCalls { get; } = [];
+
+    /// <summary>The answer to an event-type POST; null answers like the tickets plugin.</summary>
+    public Func<string, JsonObject, HttpAnswer>? EventResponse { get; set; }
+
+    /// <summary>The drawRoot a lock or lockts answers with by default.</summary>
+    public static readonly string DrawRoot = "0x" + string.Concat(Enumerable.Repeat("d7", 32));
+
     public bool Throw { get; set; }
 
     public Task<IndexerResponse> SendSingleAsync(AnchorEntry entry, int? timeoutMs, CancellationToken cancellationToken)
@@ -102,6 +112,20 @@ internal sealed class FakeTransport : IIndexerTransport
         TimeoutCalls.Add(timeoutMs);
 
         return Task.FromResult(QueryResponse ?? Answer(200, $$"""{"hash":"{{hash}}","proof":["{{ProofA}}","{{ProofB}}"],"proofType":"transactionHash"}"""));
+    }
+
+    public Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken)
+    {
+        MaybeThrow();
+        EventCalls.Add((eventType, payload.ToJsonString()));
+        TimeoutCalls.Add(timeoutMs);
+
+        return Task.FromResult(EventResponse?.Invoke(eventType, payload) ?? eventType switch
+        {
+            "batch" => Answer(200, """{"anchorId":"a-batch","batchId":42,"batchRoot":"0x01","ticketRoot":"0x02","txHash":"0x03"}"""),
+            "lock" or "lockts" => Answer(202, $$"""{"blockchainStatus":"SUBMITTED","contractAddress":"0x5f","key":"{{DrawRoot}}","anchorId":"a-{{eventType}}"}"""),
+            _ => Answer(202, $$"""{"blockchainStatus":"SUBMITTED","contractAddress":"0x5f","anchorId":"a-{{eventType}}"}"""),
+        });
     }
 
     public void Dispose()

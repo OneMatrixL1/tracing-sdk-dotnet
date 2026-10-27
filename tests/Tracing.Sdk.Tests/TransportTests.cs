@@ -181,7 +181,7 @@ public class TransportTests(EchoServer server) : IClassFixture<EchoServer>
     {
         using var transport = Transport("/fail");
 
-        var e = await Assert.ThrowsAsync<TransportException>(() => transport.SendSingleAsync(Entry, null, default));
+        var e = await Assert.ThrowsAsync<IndexerException>(() => transport.SendSingleAsync(Entry, null, default));
         Assert.Equal("Indexer returned HTTP 500: nope", e.Message);
     }
 

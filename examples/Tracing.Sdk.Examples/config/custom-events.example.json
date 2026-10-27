@@ -1,0 +1,24 @@
+{
+  // A schema the SDK does not ship: the backend would declare the same
+  // fields in its plugin.yaml. Nothing in the SDK changes to anchor it.
+  "plugin": "logistics",
+  "eventTypes": [
+    {
+      "name": "shipment",
+      "anchoring": { "mode": "transactionHash" },
+      "request": {
+        "fields": [
+          { "name": "hash", "type": "bytes32", "required": true, "role": "key" },
+          { "name": "shipmentId", "type": "string", "required": true },
+          { "name": "warehouse", "type": "string", "required": true },
+          { "name": "weightGrams", "type": "uint64", "required": true },
+          { "name": "note", "type": "string" }
+        ]
+      },
+      // Shipment records are XML; hash them with Exclusive C14N first.
+      "hashing": { "dataType": "xml" },
+      // The portal finds a shipment by its id and its hash.
+      "link": { "fields": ["shipmentId", "hash"] }
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Tracing.Sdk;
 
 /// <summary>
@@ -57,4 +59,53 @@ public class TransportException : TracingSdkException
         : base(message, innerException)
     {
     }
+}
+
+/// <summary>
+/// The Indexer answered non-2xx. Carries the fields of its
+/// <c>{ "error": "&lt;CODE&gt;", "field", "index", "message", "batchId" }</c>
+/// body, so a caller can branch on <see cref="ErrorCode"/> — for example
+/// resend the same batch on <c>CONFIRMATION_TIMEOUT</c>.
+/// </summary>
+public class IndexerException : TransportException
+{
+    public IndexerException(string message, int statusCode, string body, JsonElement? json)
+        : base(message)
+    {
+        StatusCode = statusCode;
+        Body = body;
+
+        if (json is { ValueKind: JsonValueKind.Object } error)
+        {
+            ErrorCode = StringOf(error, "error");
+            Field = StringOf(error, "field");
+            ServerMessage = StringOf(error, "message");
+            Index = error.TryGetProperty("index", out var index) && index.TryGetInt32(out var i) ? i : null;
+            BatchId = error.TryGetProperty("batchId", out var batchId) && batchId.TryGetInt64(out var b) ? b : null;
+        }
+    }
+
+    /// <summary>HTTP status code.</summary>
+    public int StatusCode { get; }
+
+    /// <summary>The raw response body.</summary>
+    public string Body { get; }
+
+    /// <summary>The <c>error</c> code, e.g. <c>DRAW_NOT_LOCKED</c>; null when the body has none.</summary>
+    public string? ErrorCode { get; }
+
+    /// <summary>The request field the error is about, when the Indexer names one.</summary>
+    public string? Field { get; }
+
+    /// <summary>The position inside an array field (or a batch) the error is about.</summary>
+    public int? Index { get; }
+
+    /// <summary>The Indexer's human-readable <c>message</c>.</summary>
+    public string? ServerMessage { get; }
+
+    /// <summary>The stored tree the error is about (<c>ANCHOR_REVERTED</c>).</summary>
+    public long? BatchId { get; }
+
+    private static string? StringOf(JsonElement error, string name) =>
+        error.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 }

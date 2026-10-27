@@ -1,5 +1,6 @@
 // Runnable examples, one scenario per file. Set your endpoint and token (and
-// RPC URL for "verify") in ExampleSettings.cs, then run:
+// RPC URL for "verify") in ExampleSettings.cs; the tickets-* and custom
+// examples read config/tracing.example.json instead. Then run:
 //
 //   dotnet run --project examples/Tracing.Sdk.Examples -- <example>
 using Tracing.Sdk;
@@ -12,6 +13,12 @@ var examples = new Dictionary<string, Func<Task>>
     ["xml"] = XmlExample.RunAsync,           // XmlExample.cs
     ["query"] = QueryExample.RunAsync,       // QueryExample.cs
     ["verify"] = VerifyExample.RunAsync,     // VerifyExample.cs
+
+    // Event types: config/tracing.example.json + config/tickets-events.json.
+    ["tickets-batch"] = TicketsBatchExample.RunAsync,     // TicketsBatchExample.cs
+    ["tickets-lock"] = TicketsLockExample.RunAsync,       // TicketsLockExample.cs
+    ["tickets-records"] = TicketsRecordsExample.RunAsync, // TicketsRecordsExample.cs
+    ["custom"] = CustomEventExample.RunAsync,             // CustomEventExample.cs
 };
 
 if (args.Length != 1 || !examples.TryGetValue(args[0], out var example))

@@ -19,12 +19,15 @@ internal interface IIndexerTransport : IDisposable
     Task<IndexerResponse> SendBatchAsync(IReadOnlyList<AnchorEntry> entries, int? timeoutMs, CancellationToken cancellationToken);
 
     Task<HttpAnswer> QueryByHashAsync(string hash, int? timeoutMs, CancellationToken cancellationToken);
+
+    Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken);
 }
 
 /// <summary>
 /// POST /api/anchors for a single record, POST /api/anchors/batch for a
-/// batch, and GET /api/anchors?hash=... to look an anchor up. Redirects are
-/// never followed.
+/// batch, GET /api/anchors?hash=... to look an anchor up, and
+/// POST /api/anchors?eventType=... for a record of a configured event type.
+/// Redirects are never followed.
 /// </summary>
 internal sealed class IndexerTransport : IIndexerTransport
 {
@@ -75,6 +78,13 @@ internal sealed class IndexerTransport : IIndexerTransport
     public Task<HttpAnswer> QueryByHashAsync(string hash, int? timeoutMs, CancellationToken cancellationToken) =>
         ExecuteAsync(HttpMethod.Get, _singleUrl + "?hash=" + Uri.EscapeDataString(hash), null, timeoutMs, cancellationToken);
 
+    /// <summary>
+    /// POST /api/anchors?eventType=... with the request body of that event
+    /// type, already validated and normalized.
+    /// </summary>
+    public Task<HttpAnswer> PostEventAsync(string eventType, JsonObject payload, int? timeoutMs, CancellationToken cancellationToken) =>
+        ExecuteAsync(HttpMethod.Post, _singleUrl + "?eventType=" + Uri.EscapeDataString(eventType), payload.ToJsonString(), timeoutMs, cancellationToken);
+
     public void Dispose() => _client.Dispose();
 
     private async Task<IndexerResponse> PostAsync(string url, JsonNode payload, int recordCount, int? timeoutMs, CancellationToken cancellationToken)
@@ -91,7 +101,7 @@ internal sealed class IndexerTransport : IIndexerTransport
 
         if (answer.StatusCode is < 200 or >= 300)
         {
-            throw new TransportException($"Indexer returned HTTP {answer.StatusCode}: {answer.Body}");
+            throw new IndexerException($"Indexer returned HTTP {answer.StatusCode}: {answer.Body}", answer.StatusCode, answer.Body, answer.Json);
         }
 
         return answer;

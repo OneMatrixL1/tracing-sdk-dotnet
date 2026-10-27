@@ -11,4 +11,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <!-- The JSON configs the tickets and custom examples load. -->
+  <ItemGroup>
+    <None Include="config\*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

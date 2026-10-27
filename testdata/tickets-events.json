@@ -1,0 +1,60 @@
+{
+  "plugin": "tickets",
+  "eventTypes": [
+    {
+      "name": "batch",
+      "anchoring": { "mode": "merkle", "merkle": { "batching": "request", "leaf": "client", "params": { "maxTreeSize": 100000 } } },
+      "request": {
+        "fields": [
+          { "name": "draw", "type": "string", "required": true },
+          { "name": "channel", "type": "string", "required": true },
+          { "name": "sequence", "type": "uint64", "required": true, "role": "sequence" },
+          { "name": "ticketHashes", "type": "bytes32[]", "required": true, "role": "leaves" },
+          { "name": "value", "type": "uint64", "required": true }
+        ]
+      },
+      "hashing": { "leafPrefix": "0x00" },
+      "link": { "fields": ["draw", "channel", "sequence"], "leafParam": "ticketHash" }
+    },
+    {
+      "name": "lock",
+      "anchoring": { "mode": "transactionHash", "key": "derived" },
+      "request": { "fields": [ { "name": "draw", "type": "string", "required": true } ] }
+    },
+    {
+      "name": "lockts",
+      "anchoring": { "mode": "transactionHash", "key": "derived" },
+      "request": {
+        "fields": [
+          { "name": "draw", "type": "string", "required": true },
+          { "name": "signature", "type": "bytes", "required": true }
+        ]
+      }
+    },
+    {
+      "name": "events",
+      "anchoring": { "mode": "transactionHash" },
+      "request": {
+        "fields": [
+          { "name": "hash", "type": "bytes32", "required": true, "role": "key" },
+          { "name": "draw", "type": "string", "required": true }
+        ]
+      }
+    },
+    {
+      "name": "recon",
+      "anchoring": { "mode": "transactionHash" },
+      "request": {
+        "fields": [
+          { "name": "hash", "type": "bytes32", "required": true, "role": "key" },
+          { "name": "draw", "type": "string", "required": true }
+        ]
+      }
+    },
+    {
+      "name": "subagent",
+      "anchoring": { "mode": "transactionHash" },
+      "request": { "fields": [ { "name": "hash", "type": "bytes32", "required": true, "role": "key" } ] }
+    }
+  ]
+}
